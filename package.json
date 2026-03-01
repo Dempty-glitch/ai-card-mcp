@@ -1,0 +1,28 @@
+{
+    "name": "ai-card-mcp",
+    "version": "0.1.0",
+    "description": "MCP Server for AI Agent secure virtual card payments (JIT Tokenized)",
+    "main": "dist/index.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "dev": "npx tsx src/index.ts"
+    },
+    "keywords": [
+        "mcp",
+        "ai-agent",
+        "virtual-card",
+        "payment"
+    ],
+    "license": "MIT",
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.12.1",
+        "playwright": "^1.52.0",
+        "zod": "^3.25.11"
+    },
+    "devDependencies": {
+        "typescript": "^5.8.3",
+        "tsx": "^4.19.4",
+        "@types/node": "^22.15.21"
+    }
+}
