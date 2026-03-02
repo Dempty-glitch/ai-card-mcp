@@ -8,25 +8,26 @@ Sản phẩm là một "Combo" đóng gói sẵn nhằm trang bị khả năng t
 **Mục tiêu:** Cho phép AI Agent (như Claude Desktop, AutoGen, CrewAI) của khách hàng có thể tự động mua sắm, trả phí dịch vụ trên mạng mà **AI không bao giờ biết được số thẻ thật (16 chữ số, CVV)**. Điều này ngăn chặn rủi ro AI bị "hack" (prompt injection) hoặc "ngáo" lấy thẻ đi mua lung tung.
 
 ## 2. Bài Toán Đóng Gói (Distribution Models)
-Làm thế nào để người lạ mua combo về và "cắm" vào AI của họ một cách mượt mà nhất?
+Làm thế nào để người lạ mua combo về và "cắm" vào AI của họ một cách mượt mà nhất? Giải pháp là **Kiến trúc Giao diện Kép (Dual-Interface)**:
 
-### Mô Hình A: The "Blind" Form Filler (Can thiệp Trình duyệt)
-Nếu AI của khách hàng đang dùng Browser Automation (ví dụ dùng Puppeteer/Playwright để duyệt web mua hàng):
-1. **Khách mua Combo** và nhận được một `License Key`.
-2. Khách chạy **MCP Server của chúng ta** dưới dạng một app nhỏ trên máy họ.
-3. Khi AI của khách truy cập trang giỏ hàng và đến bước thanh toán, thay vì AI tự gõ thẻ, AI sẽ gọi công cụ của chúng ta: `process_secure_checkout(url_hien_tai)`
-4. MCP Server của chúng ta sẽ:
-   - Tự động quét màn hình trang web đó để tìm các ô điền thẻ (Credit Card fields).
-   - Gọi API về backend của chúng ta để lấy thông tin Thẻ Ảo (dựa vào `License Key`).
-   - TỰ ĐỘNG BƠM (inject) số thẻ vào các ô đó bằng script cục bộ và bấm "Thanh toán".
-5. Xong xuôi, MCP trả kết quả về cho AI: "Đã thanh toán thành công". 
--> *AI hoàn toàn không có cơ hội nhìn thấy số thẻ.*
+### 2.1. Z-ZERO Developer Portal (Giao diện cho Người / Human)
+Người dùng (Developer/Operator) sẽ truy cập một **Web Dashboard** chuyên nghiệp để:
+1. Đăng nhập qua ví Web3 (MetaMask/Phantom) hoặc Email.
+2. Nạp tiền ký quỹ bằng Crypto (USDC/USDT mạng Base/Arbitrum) để tránh rào cản ngân hàng.
+3. Tạo "Agent Persona" và nhận về `API_KEY` cùng file cấu hình `mcp_config.json`.
+4. Xem lịch sử giao dịch, biểu đồ chi tiêu và tải hóa đơn đối soát.
+*(Lưu ý: Không dùng Chatbot làm công cụ quản lý để đảm bảo tính chuyên nghiệp và minh bạch).*
 
-### Mô Hình B: The API Proxy (Dành cho mua dịch vụ số)
-Nếu AI của khách muốn mua API, mua tên miền, nạp credit SaaS (không qua giao diện web mà qua API):
-1. Khách cài MCP Server.
-2. MCP Server cung cấp sẵn các công cụ như `buy_digital_service(service_name, amount)`.
-3. AI chỉ việc gọi hàm này. MCP sẽ gửi request về Backend của chúng ta. Backend sẽ dùng thẻ ảo để thanh toán với đối tác thứ 3, sau đó trả kết quả/token về cho AI.
+### 2.2. MCP Server Toolkit (Giao diện cho Máy / AI Agent)
+Bản thân AI (Claude, AutoGPT) "mù" giao diện web, nó chỉ cần tải bộ công cụ **MCP Server** của chúng ta (kết nối bằng `API_KEY` lấy từ Portal).
+- MCP cài trên máy tính/server của khách hàng.
+- Khi AI cần mua hạn mức Cloud hoặc API, nó gọi MCP: `request_payment_token()`.
+- MCP tự động gọi backend của bạn, lấy token, chạy ngầm Playwright để bơm vào thẻ Giỏ hàng.
+
+### 2.3. Lớp Trừu Tượng Đối Tác (Issuer Abstraction Layer)
+**Bảo mật Kinh doanh (Trade Secret):** Toàn bộ việc hệ thống dùng Airwallex (hay đối tác thẻ nào khác) sẽ được giấu kín hoàn toàn ở Backend của hệ thống Z-ZERO.
+- Web Dashboard và MCP của khách hàng chỉ gọi API nội bộ của Z-ZERO.
+- Khách hàng không bao giờ biết Z-ZERO đang gọi API của Airwallex để khởi tạo thẻ thực tế. Điều này chống việc bị copy mô hình kinh doanh.
 
 ## 3. Kiến Trúc Bảo Mật Tối Cao: Tokenized JIT (Just-In-Time) Payment
 

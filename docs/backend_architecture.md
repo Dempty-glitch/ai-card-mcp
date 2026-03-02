@@ -1,12 +1,19 @@
 # Backend Architecture: Neobank API for AI Virtual Cards
 
 ## Overview
-This document defines the real backend that will replace `mock_backend.ts` in production. It uses **Supabase** (PostgreSQL + Edge Functions) for rapid deployment.
+This document defines the real backend that will replace `mock_backend.ts` in production. It acts as a **Crypto-to-Fiat Bridge** and uses **Supabase** (PostgreSQL + Edge Functions) for rapid deployment.
+
+### Issuer Abstraction Layer (Bảo mật Bí mật Kinh doanh)
+Crucially, the Z-ZERO backend sits BETWEEN the client (Web/MCP) and the actual Neobank providers (e.g., Airwallex, Stripe Issuing).
+- Clients send API requests to `api.z-zero.com`.
+- Supabase Edge Functions securely call the Airwallex APIs using private backend keys.
+- **Result:** The business logic, fiat rails, and specific partners (Airwallex) remain a "Trade Secret" invisible to the end-users and their AI agents.
 
 ## Database Schema (Supabase / PostgreSQL)
 
 ```mermaid
 erDiagram
+    USERS ||--o{ WALLETS : "deposits_crypto_to"
     USERS ||--o{ CARDS : "owns"
     CARDS ||--o{ TOKENS : "issues"
     TOKENS ||--o{ TRANSACTIONS : "creates"
@@ -15,19 +22,26 @@ erDiagram
         uuid id PK
         string email
         string api_key_hash
-        float total_balance
         timestamp created_at
+    }
+
+    WALLETS {
+        uuid id PK
+        uuid user_id FK
+        string crypto_currency "USDT | USDC"
+        float balance
+        string deposit_address
     }
 
     CARDS {
         uuid id PK
         uuid user_id FK
         string alias
+        string provider_card_id "Hidden Airwallex ID"
         string card_number_encrypted
         string exp_encrypted
         string cvv_encrypted
-        float balance
-        float spending_limit
+        float allocated_limit_usd
         string currency
         boolean is_active
         timestamp created_at
