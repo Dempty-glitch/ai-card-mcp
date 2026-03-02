@@ -11,6 +11,19 @@
 ### Flow 1: Onboarding & Deposit (Crypto Funding)
 Goal: Pre-fund the system without a real credit card.
 
+```mermaid
+sequenceDiagram
+    participant Dev as Human (Dev)
+    participant Web as Z-ZERO Dashboard
+    participant Network as Web3 Network (Base)
+    
+    Dev->>Web: Login & Init Wallet
+    Web-->>Dev: Assign Internal Balance ($0)
+    Dev->>Network: Deposit 50 USDC
+    Network-->>Web: Confirm Deposit
+    Web-->>Dev: Update Balance to $50
+```
+
 1. **Access Web Portal:** Dev visits `app.z-zero.com`, Logs in via Email or Web3 WalletConnect (MetaMask/Phantom).
 2. **Initialize Internal Wallet:** The system provisions an `Internal USD Balance` for the Dev (Initially = $0).
 3. **Deposit Funds:** 
@@ -21,6 +34,17 @@ Goal: Pre-fund the system without a real credit card.
 ### Flow 2: Provisioning (Creating the "Agent Passport")
 Goal: Grant payment capability to a machine without exposing the web account.
 
+```mermaid
+sequenceDiagram
+    participant Dev as Human (Dev)
+    participant Web as Z-ZERO Dashboard
+    participant Bot as AI Agent
+    
+    Dev->>Web: Click [Create Agent Key]
+    Web-->>Dev: Return Z_ZERO_API_KEY
+    Dev->>Bot: Inject Key into Environment
+```
+
 1. On the Web Dashboard, Dev clicks `[Create Agent Key]`.
 2. The system generates a `Z_ZERO_API_KEY` (e.g., `zk_live_1234abc`).
 3. The customer copies this Key and places it into their Bot's environment alongside the MCP Server config.
@@ -28,6 +52,32 @@ Goal: Grant payment capability to a machine without exposing the web account.
 
 ### Flow 3: The JIT Payment Execution (Core Payment Loop)
 Goal: The AI autonomously shops using a partner's issuing rails, but is completely blind to who the partner is or the real card details.
+
+```mermaid
+sequenceDiagram
+    participant Bot as AI Agent
+    participant MCP as MCP Bridge
+    participant ZZERO as Z-ZERO Backend
+    participant Issuer as Partner API
+    participant Merchant as Merchant (OpenAI)
+    
+    Bot->>MCP: request_payment_token($10)
+    MCP->>ZZERO: Request Token (via API Key)
+    ZZERO->>ZZERO: Hold $10 from Customer Wallet
+    ZZERO->>Issuer: POST /issuing/cards ($10 limit)
+    Issuer-->>ZZERO: secure card details (4242..)
+    ZZERO->>ZZERO: Encrypt & Store Card
+    ZZERO-->>MCP: JIT Token (temp_auth_888)
+    MCP-->>Bot: JIT Token
+    
+    Bot->>MCP: execute_payment(Token)
+    MCP->>ZZERO: resolveToken(Token)
+    ZZERO-->>MCP: Card info to local RAM
+    MCP->>Merchant: Inject Card via Playwright & Click Pay
+    Merchant-->>Issuer: Charge $10
+    Issuer-->>ZZERO: Deduct $10
+    ZZERO->>ZZERO: Deduct $10 from held balance
+```
 
 1. AI Agent decides to buy a $10 SaaS subscription. It calls the MCP tool `request_payment_token()`.
 2. **Z-ZERO Backend Processing (Hidden):**
@@ -44,6 +94,18 @@ Goal: The AI autonomously shops using a partner's issuing rails, but is complete
 
 ### Flow 4: Management & Analytics (B2B Admin)
 Goal: Provide peace of mind and strict control for human operators.
+
+```mermaid
+sequenceDiagram
+    participant Dev as Human (Dev)
+    participant Web as Z-ZERO Dashboard
+    
+    Dev->>Web: Access Transactions Tab
+    Web-->>Dev: Show 'Bot_01 spent $10 at OpenAI'
+    Dev->>Web: Click [Export CSV]
+    Dev->>Web: Click [Revoke Agent Key]
+    Web-->>Dev: Bot connection severed
+```
 
 1. Dev accesses the Web Dashboard.
 2. Under the `Transactions` tab, Dev sees: `Time: 10:00 AM | Merchant: OpenAI | Amount: $10.00 | Agent: Bot_01`.
