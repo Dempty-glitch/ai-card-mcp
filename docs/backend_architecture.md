@@ -4,10 +4,10 @@
 This document defines the real backend that will replace `mock_backend.ts` in production. It acts as a **Crypto-to-Fiat Bridge** and uses **Supabase** (PostgreSQL + Edge Functions) for rapid deployment.
 
 ### Issuer Abstraction Layer (Bảo mật Bí mật Kinh doanh)
-Crucially, the Z-ZERO backend sits BETWEEN the client (Web/MCP) and the actual Neobank providers (e.g., Airwallex, Stripe Issuing).
+Crucially, the Z-ZERO backend sits BETWEEN the client (Web/MCP) and the actual Neobank providers (e.g., A Partner Neobank, Stripe Issuing).
 - Clients send API requests to `api.z-zero.com`.
-- Supabase Edge Functions securely call the Airwallex APIs using private backend keys.
-- **Result:** The business logic, fiat rails, and specific partners (Airwallex) remain a "Trade Secret" invisible to the end-users and their AI agents.
+- Supabase Edge Functions securely call the Partner Neobank APIs using private backend keys.
+- **Result:** The business logic, fiat rails, and specific partners remain a "Trade Secret" invisible to the end-users and their AI agents.
 
 ## Database Schema (Supabase / PostgreSQL)
 
@@ -37,7 +37,7 @@ erDiagram
         uuid id PK
         uuid user_id FK
         string alias
-        string provider_card_id "Hidden Airwallex ID"
+        string provider_card_id "Hidden Partner ID"
         string card_number_encrypted
         string exp_encrypted
         string cvv_encrypted
