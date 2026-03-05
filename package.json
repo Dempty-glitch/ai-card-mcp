@@ -1,8 +1,9 @@
 {
-    "name": "ai-card-mcp",
-    "version": "0.1.0",
-    "description": "MCP Server for AI Agent secure virtual card payments (JIT Tokenized)",
+    "name": "z-zero-mcp-server",
+    "version": "1.0.2",
+    "description": "Z-ZERO MCP Server — Secure JIT Virtual Card Payment tools for AI Agents (Claude, AutoGPT, CrewAI) — Real Airwallex Mastercards",
     "main": "dist/index.js",
+    "bin": "dist/index.js",
     "scripts": {
         "build": "tsc",
         "start": "node dist/index.js",
@@ -10,13 +11,25 @@
     },
     "keywords": [
         "mcp",
+        "model-context-protocol",
         "ai-agent",
         "virtual-card",
-        "payment"
+        "payment",
+        "z-zero",
+        "clawcard",
+        "jit",
+        "fintech"
     ],
+    "author": "Z-ZERO",
     "license": "MIT",
+    "files": [
+        "dist/",
+        "README.md"
+    ],
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.12.1",
+        "@supabase/supabase-js": "^2.49.4",
+        "dotenv": "^16.5.0",
         "playwright": "^1.52.0",
         "zod": "^3.25.11"
     },
