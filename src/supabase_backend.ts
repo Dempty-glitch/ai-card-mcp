@@ -115,6 +115,27 @@ export async function getBalanceRemote(cardAlias: string): Promise<{ balance: nu
     return { balance: info.walletBalance, currency: "USD" };
 }
 
+export async function getDepositAddressesRemote(): Promise<{ evm: string; tron: string } | null> {
+    const info = await resolveApiKey();
+    if (!info) return null;
+
+    const { data: wallet, error } = await supabase
+        .from("deposit_wallets")
+        .select("evm_address, tron_address")
+        .eq("user_id", info.userId)
+        .single();
+
+    if (error || !wallet) {
+        console.error("Deposit wallets not found for user:", info.userId);
+        return null;
+    }
+
+    return {
+        evm: wallet.evm_address,
+        tron: wallet.tron_address,
+    };
+}
+
 export async function issueTokenRemote(
     cardAlias: string,
     amount: number,

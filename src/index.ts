@@ -15,7 +15,8 @@ import {
     refundUnderspendRemote,
     getBalanceRemote,
     listCardsRemote,
-} from "./supabase_backend.js";
+    getDepositAddressesRemote,
+} from "./api_backend.js";
 import { fillCheckoutForm } from "./playwright_bridge.js";
 
 // ============================================================
@@ -82,6 +83,51 @@ server.tool(
                 {
                     type: "text" as const,
                     text: JSON.stringify({ card_alias, ...balance }, null, 2),
+                },
+            ],
+        };
+    }
+);
+
+// ============================================================
+// TOOL 2.5: Get deposit addresses (Phase 14 feature)
+// ============================================================
+server.tool(
+    "get_deposit_addresses",
+    "Get your unique deposit addresses for EVM networks (Base, BSC, Ethereum) and Tron. Provide these to the human user when they need to add funds to their Z-ZERO balance.",
+    {},
+    async () => {
+        const addresses = await getDepositAddressesRemote();
+        if (!addresses) {
+            return {
+                content: [
+                    {
+                        type: "text" as const,
+                        text: "Failed to retrieve deposit addresses. Please ensure your API key (passport) is valid.",
+                    },
+                ],
+                isError: true,
+            };
+        }
+        return {
+            content: [
+                {
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        networks: {
+                            evm: {
+                                address: addresses.evm,
+                                supported_chains: ["Base", "BNB Smart Chain (BSC)", "Ethereum"],
+                                tokens: ["USDC", "USDT"]
+                            },
+                            tron: {
+                                address: addresses.tron,
+                                supported_chains: ["Tron (TRC-20)"],
+                                tokens: ["USDT"]
+                            }
+                        },
+                        note: "Funds sent to these addresses will be automatically credited to your Z-ZERO balance within minutes."
+                    }, null, 2),
                 },
             ],
         };
