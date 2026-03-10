@@ -9,6 +9,8 @@ export interface VirtualCard {
     name: string;
     balance: number;      // remaining balance in USD
     currency: string;
+    error?: string;
+    message?: string;
 }
 
 export interface PaymentToken {
@@ -19,6 +21,8 @@ export interface PaymentToken {
     created_at: number;   // Unix timestamp
     ttl_seconds: number;  // Time-to-live
     used: boolean;
+    error?: string;
+    message?: string;
 }
 
 export interface CardData {
@@ -27,6 +31,8 @@ export interface CardData {
     exp_year: string;
     cvv: string;
     name: string;
+    error?: string;
+    message?: string;
 }
 
 export interface PaymentResult {

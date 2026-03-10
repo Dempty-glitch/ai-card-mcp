@@ -4,14 +4,19 @@
 
 import type { CardData, PaymentToken } from "./types.js";
 
-const API_BASE_URL = process.env.Z_ZERO_API_BASE_URL || "https://clawcard.store";
+const API_BASE_URL = process.env.Z_ZERO_API_BASE_URL || "https://www.clawcard.store";
 const PASSPORT_KEY = process.env.Z_ZERO_API_KEY || "";
 
 if (!PASSPORT_KEY) {
-    console.error("❌ Missing Z_ZERO_API_KEY (Your Passport) in environment variables.");
+    console.error("❌ ERROR: Z_ZERO_API_KEY (Passport Key) is missing!");
+    console.error("🔐 Please get your Passport Key from: https://www.clawcard.store/dashboard/agents");
+    console.error("🛠️ Setup: Ensure 'Z_ZERO_API_KEY' is set in your environment variables.");
 }
 
 async function apiRequest(endpoint: string, method: string = 'GET', body: any = null) {
+    if (!PASSPORT_KEY) {
+        return { error: "AUTH_REQUIRED", message: "Z_ZERO_API_KEY is missing. Human needs to set it in MCP config." };
+    }
     const url = `${API_BASE_URL.replace(/\/$/, '')}${endpoint}`;
     try {
         const res = await fetch(url, {
@@ -26,31 +31,31 @@ async function apiRequest(endpoint: string, method: string = 'GET', body: any = 
         if (!res.ok) {
             const err = await res.json().catch(() => ({ error: res.statusText }));
             console.error(`[API ERROR] ${endpoint}:`, err.error);
-            return null;
+            return { error: "API_ERROR", message: err.error || res.statusText };
         }
 
         return await res.json();
     } catch (err: any) {
         console.error(`[NETWORK ERROR] ${endpoint}:`, err.message);
-        return null;
+        return { error: "NETWORK_ERROR", message: err.message };
     }
 }
 
-export async function listCardsRemote(): Promise<Array<{ alias: string; balance: number; currency: string }>> {
-    const data = await apiRequest('/api/tokens/cards', 'GET');
-    return data?.cards || [];
+export async function listCardsRemote(): Promise<any> {
+    return await apiRequest('/api/tokens/cards', 'GET');
 }
 
-export async function getBalanceRemote(cardAlias: string): Promise<{ balance: number; currency: string } | null> {
-    const cards = await listCardsRemote();
-    const card = cards.find(c => c.alias === cardAlias);
+export async function getBalanceRemote(cardAlias: string): Promise<any> {
+    const data = await listCardsRemote();
+    if (data?.error) return data;
+    const cards = data?.cards || [];
+    const card = cards.find((c: any) => c.alias === cardAlias);
     if (!card) return null;
     return { balance: card.balance, currency: card.currency };
 }
 
-export async function getDepositAddressesRemote(): Promise<{ evm: string; tron: string } | null> {
-    const data = await apiRequest('/api/tokens/cards', 'GET');
-    return data?.deposit_addresses || null;
+export async function getDepositAddressesRemote(): Promise<any> {
+    return await apiRequest('/api/tokens/cards', 'GET');
 }
 
 export async function issueTokenRemote(
@@ -61,7 +66,10 @@ export async function issueTokenRemote(
     const data = await apiRequest('/api/tokens/issue', 'POST', {
         card_alias: cardAlias,
         amount,
-        merchant
+        merchant,
+        device_fingerprint: `mcp-host-${process.platform}-${process.arch}`,
+        network_id: process.env.NETWORK_ID || "unknown-local-net",
+        session_id: `sid-${Math.random().toString(36).substring(7)}`
     });
 
     if (!data) return null;
@@ -100,8 +108,9 @@ export async function burnTokenRemote(token: string, receipt_id?: string): Promi
     return !!data;
 }
 
-export async function cancelTokenRemote(token: string): Promise<{ success: boolean; refunded_amount: number }> {
+export async function cancelTokenRemote(token: string): Promise<any> {
     const data = await apiRequest('/api/tokens/cancel', 'POST', { token });
+    if (data?.error) return data;
     return {
         success: !!data,
         refunded_amount: data?.refunded_amount || 0

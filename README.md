@@ -1,53 +1,105 @@
-# Z-ZERO: AI Virtual Card MCP Server
+# OpenClaw: Z-ZERO AI Agent MCP Server
 
-A Zero-Trust Payment Protocol built specifically for AI Agents utilizing the Model Context Protocol (MCP).
+A Zero-Trust Payment Protocol built specifically for AI Agents using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Give your local agents (Claude, Cursor, AntiGravity) the ability to make real-world purchases — securely, without ever seeing a real card number.
 
-## The Concept (Tokenized JIT Payments)
-This MCP server acts as an "Invisible Bridge" for your AI Agents. Instead of giving your LLM direct access to a 16-digit credit card number (which triggers safety filters and risks prompt injection theft), the AI only handles **temporary, single-use tokens**.
+## How It Works
 
-The local MCP client resolves the token securely in RAM, injects the real card data directly into the payment form (via Playwright headless browser), and clicks "Pay". The virtual card and token are burned milliseconds later.
+Instead of giving your AI direct access to a credit card number, OpenClaw issues **temporary, single-use JIT tokens**. The token is resolved in RAM, Playwright injects the card data directly into the payment form, and the virtual card is burned milliseconds later. Your AI never sees the PAN, CVV, or expiry.
 
-## Features
-- **Zero PII (Blind Execution):** AI never sees card numbers.
-- **Exact-Match Funding:** Tokens are tied to virtual cards locked to the exact requested amount.
-- **Phantom Burn:** Single-use architecture. Cards self-destruct after checking out.
-- **Stripe/HTML Form Injection:** Automatically fills common checkout domains.
+---
 
-## Documentation
-Check the `docs/` folder for complete system design and architecture:
-- [Product Plan & Core Concept](docs/ai_card_product_plan.md)
-- [MCP Implementation Plan](docs/implementation_plan.md)
-- [Mock Backend Architecture](docs/backend_architecture.md)
-- [Live Demo Walkthrough & Test Results](docs/walkthrough.md)
+## Quick Install (Recommended)
 
-## Getting Started
-
-### 1. Install Dependencies
 ```bash
-npm install
-npx playwright install chromium
+npx z-zero-mcp-server
 ```
 
-### 2. Build the Server
-```bash
-npm run build
-```
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
-### 3. Usage with Claude Desktop
-Add this to your `mcp_config.json`:
 ```json
 {
   "mcpServers": {
-    "ai-card-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/ai-card-mcp/dist/index.js"]
+    "openclaw": {
+      "command": "npx",
+      "args": ["-y", "z-zero-mcp-server@latest"],
+      "env": {
+        "Z_ZERO_API_KEY": "zk_live_your_passport_key_here"
+      }
     }
   }
 }
 ```
 
+Get your Passport Key at: **[clawcard.store/dashboard/agents](https://www.clawcard.store/dashboard/agents)**
+
+---
+
+## Requirements
+
+- **Node.js v18+** — [nodejs.org](https://nodejs.org)
+- **Passport Key** — starts with `zk_live_`, get it from the dashboard above
+
+---
+
 ## Available MCP Tools
-- `list_cards`: View available virtual cards and balances.
-- `check_balance`: Query a specific card's real-time balance.
-- `request_payment_token`: Generate a JIT auth token locked to a specific amount.
-- `execute_payment`: Passes the token to the Playwright bridge to auto-fill the checkout URL and burn the token.
+
+| Tool | Description |
+|------|-------------|
+| `list_cards` | View your virtual card aliases and balances |
+| `check_balance` | Query a specific card's real-time balance |
+| `get_deposit_addresses` | Get deposit addresses to top up your balance |
+| `request_payment_token` | Generate a JIT auth token for a specific amount |
+| `execute_payment` | Auto-fill checkout form and execute payment |
+| `cancel_payment_token` | Cancel unused token, refund to wallet |
+| `request_human_approval` | Pause and ask human for approval |
+
+---
+
+## REST API Reference
+
+The Z-ZERO backend is hosted at `https://www.clawcard.store`. All endpoints require a `Bearer` token using your Passport Key.
+
+> ⚠️ **Use the MCP tools above instead of calling REST directly.** If you must call REST, use the exact paths below.
+
+### `GET /api/tokens/cards`
+Returns your card list, balance, and deposit addresses.
+```bash
+curl -X GET "https://www.clawcard.store/api/tokens/cards" \
+  -H "Authorization: Bearer zk_live_your_key"
+```
+
+**Aliases (also work):**
+- `GET /api/v1/cards` ← for agents that guess REST-style paths
+
+### `POST /api/tokens/issue`
+Issue a JIT payment token.
+
+### `POST /api/tokens/resolve`
+Resolve a token to card data (server-side only).
+
+### `POST /api/tokens/burn`
+Burn a used token.
+
+### `POST /api/tokens/cancel`
+Cancel an unused token (refunds balance).
+
+---
+
+## Troubleshooting
+
+### "Z_ZERO_API_KEY is missing"
+1. Go to [clawcard.store/dashboard/agents](https://www.clawcard.store/dashboard/agents)
+2. Copy your Passport Key (starts with `zk_live_`)
+3. Add it to your config as `Z_ZERO_API_KEY`
+4. **Restart** Claude Desktop / Cursor
+
+### "Invalid API Key" (401)
+- Double-check you copied the full key (e.g. `zk_live_c0g3l`)
+- Make sure there are no extra spaces or line breaks
+
+### "404 Not Found" on `/api/v1/cards`
+- This is a legacy path alias — it should now work. If not, use `/api/tokens/cards` directly.
+
+---
+
+*Security: OpenClaw never stores your Passport Key. It is passed via environment variables and card data exists only in volatile RAM during execution.*

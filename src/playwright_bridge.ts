@@ -17,7 +17,7 @@ export async function fillCheckoutForm(
     const page = await context.newPage();
 
     try {
-        await page.goto(checkoutUrl, { waitUntil: "networkidle", timeout: 30000 });
+        await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
         // ============================================================
         // STRATEGY 1: Standard HTML form fields

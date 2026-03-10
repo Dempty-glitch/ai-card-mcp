@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Z-ZERO MCP Server (z-zero-mcp-server) v1.0.2
+// OpenClaw MCP Server (z-zero-mcp-server) v1.0.3
 // Exposes secure JIT payment tools to AI Agents via Model Context Protocol
-// Now connected to REAL Airwallex Issuing API — produces real Mastercards
+// Status: Connected to Z-ZERO Gateway — produces secure JIT virtual cards
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -24,7 +24,7 @@ import { fillCheckoutForm } from "./playwright_bridge.js";
 // ============================================================
 const server = new McpServer({
     name: "z-zero-mcp-server",
-    version: "1.0.2",
+    version: "1.0.3",
 });
 
 // ============================================================
@@ -35,7 +35,30 @@ server.tool(
     "List all available virtual card aliases and their balances. No sensitive data is returned.",
     {},
     async () => {
-        const cards = await listCardsRemote();
+        const data = await listCardsRemote();
+        if (data?.error === "AUTH_REQUIRED") {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: "❌ AUTHENTICATION REQUIRED: Your Z_ZERO_API_KEY (Passport Key) is missing from the MCP configuration.\n\n" +
+                        "👉 Please GET your key here: https://www.clawcard.store/dashboard/agents\n" +
+                        "👉 Then SET it as the 'Z_ZERO_API_KEY' environment variable in your AI tool (Claude Desktop/Cursor) and RESTART the tool."
+                }],
+                isError: true
+            };
+        }
+        if (data?.error) {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: `❌ API ERROR: ${data.message || data.error}\n\nCould not fetch cards. Please verify your Passport Key is correct.`
+                }],
+                isError: true
+            };
+        }
+        const cards = data?.cards || [];
+        const activeTokens = data?.active_tokens || [];
+        const recentTokens = data?.recent_tokens || [];
         return {
             content: [
                 {
@@ -43,6 +66,8 @@ server.tool(
                     text: JSON.stringify(
                         {
                             cards,
+                            active_tokens: activeTokens,
+                            recent_tokens: recentTokens,
                             note: "Use card aliases to request payment tokens. Never ask for real card numbers.",
                         },
                         null,
@@ -66,13 +91,24 @@ server.tool(
             .describe("The alias of the card to check, e.g. 'Card_01'"),
     },
     async ({ card_alias }) => {
-        const balance = await getBalanceRemote(card_alias);
-        if (!balance) {
+        const data = await getBalanceRemote(card_alias);
+        if (data?.error === "AUTH_REQUIRED") {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: "❌ AUTHENTICATION REQUIRED: Your Z_ZERO_API_KEY (Passport Key) is missing from the MCP configuration.\n\n" +
+                        "👉 Please GET your key here: https://www.clawcard.store/dashboard/agents\n" +
+                        "👉 Then SET it as the 'Z_ZERO_API_KEY' environment variable and RESTART."
+                }],
+                isError: true
+            };
+        }
+        if (!data || data.error) {
             return {
                 content: [
                     {
                         type: "text" as const,
-                        text: `Card "${card_alias}" not found or API key is invalid. Use list_cards to see available cards.`,
+                        text: `Card "${card_alias}" not found or API issue. Use list_cards to see available cards.`,
                     },
                 ],
                 isError: true,
@@ -82,7 +118,7 @@ server.tool(
             content: [
                 {
                     type: "text" as const,
-                    text: JSON.stringify({ card_alias, ...balance }, null, 2),
+                    text: JSON.stringify({ card_alias, ...data }, null, 2),
                 },
             ],
         };
@@ -97,13 +133,25 @@ server.tool(
     "Get your unique deposit addresses for EVM networks (Base, BSC, Ethereum) and Tron. Provide these to the human user when they need to add funds to their Z-ZERO balance.",
     {},
     async () => {
-        const addresses = await getDepositAddressesRemote();
+        const data = await getDepositAddressesRemote();
+        if (data?.error === "AUTH_REQUIRED") {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: "❌ AUTHENTICATION REQUIRED: Your Z_ZERO_API_KEY (Passport Key) is missing from the MCP configuration.\n\n" +
+                        "👉 Please GET your key here: https://www.clawcard.store/dashboard/agents\n" +
+                        "👉 Then SET it as the 'Z_ZERO_API_KEY' environment variable and RESTART."
+                }],
+                isError: true
+            };
+        }
+        const addresses = data?.deposit_addresses;
         if (!addresses) {
             return {
                 content: [
                     {
                         type: "text" as const,
-                        text: "Failed to retrieve deposit addresses. Please ensure your API key (passport) is valid.",
+                        text: "Failed to retrieve deposit addresses. Please ensure your Z_ZERO_API_KEY (Passport Key) is valid. You can find it at https://www.clawcard.store/dashboard/agents",
                     },
                 ],
                 isError: true,
@@ -135,11 +183,11 @@ server.tool(
 );
 
 // ============================================================
-// TOOL 3: Request a temporary payment token (issues real JIT card)
+// TOOL 3: Request a temporary payment token (issues secure JIT card)
 // ============================================================
 server.tool(
     "request_payment_token",
-    "Request a temporary payment token for a specific amount. A real single-use virtual Mastercard is issued via Airwallex. The token is valid for 30 minutes. Min: $1, Max: $100. Use this token with execute_payment to complete a purchase.",
+    "Request a temporary payment token for a specific amount. A secure single-use virtual card is issued via the Z-ZERO network. The token is valid for 30 minutes. Min: $1, Max: $100. Use this token with execute_payment to complete a purchase.",
     {
         card_alias: z
             .string()
@@ -155,15 +203,26 @@ server.tool(
     },
     async ({ card_alias, amount, merchant }) => {
         const token = await issueTokenRemote(card_alias, amount, merchant);
-        if (!token) {
-            const balance = await getBalanceRemote(card_alias);
+        if (token?.error === "AUTH_REQUIRED") {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: "❌ AUTHENTICATION REQUIRED: Your Z_ZERO_API_KEY (Passport Key) is missing from the MCP configuration.\n\n" +
+                        "👉 Please GET your key here: https://www.clawcard.store/dashboard/agents"
+                }],
+                isError: true
+            };
+        }
+        if (!token || token.error) {
+            const balanceData = await getBalanceRemote(card_alias);
+            const balance = balanceData?.balance;
             return {
                 content: [
                     {
                         type: "text" as const,
-                        text: balance
-                            ? `Insufficient balance. Card "${card_alias}" has $${balance.balance} but you requested $${amount}. Or amount is outside the $1-$100 limit.`
-                            : `Card "${card_alias}" not found or API key is invalid.`,
+                        text: balance !== undefined
+                            ? `Insufficient balance. Card "${card_alias}" has $${balance} but you requested $${amount}. Or amount is outside the $1-$100 limit.`
+                            : `Card "${card_alias}" not found, API key is invalid, or amount limit exceeded.`,
                     },
                 ],
                 isError: true,
@@ -184,7 +243,7 @@ server.tool(
                             amount: token.amount,
                             merchant: token.merchant,
                             expires_at: expiresAt,
-                            real_card_issued: !!token.airwallex_card_id,
+                            card_issued: true,
                             instructions:
                                 "Use this token with execute_payment within 30 minutes. IMPORTANT: If the actual checkout price is HIGHER than the token amount, do NOT proceed — call cancel_payment_token first and request a new token with the correct amount.",
                         },
@@ -219,7 +278,17 @@ server.tool(
     async ({ token, checkout_url, actual_amount }) => {
         // Step 1: Resolve token → card data (RAM only)
         const cardData = await resolveTokenRemote(token);
-        if (!cardData) {
+        if (cardData?.error === "AUTH_REQUIRED") {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: "❌ AUTHENTICATION REQUIRED: Your Z_ZERO_API_KEY (Passport Key) is missing from the MCP configuration.\n\n" +
+                        "👉 Please GET your key here: https://www.clawcard.store/dashboard/agents"
+                }],
+                isError: true
+            };
+        }
+        if (!cardData || cardData.error) {
             return {
                 content: [
                     {
@@ -280,7 +349,17 @@ server.tool(
     },
     async ({ token, reason }) => {
         const result = await cancelTokenRemote(token);
-        if (!result.success) {
+        if (result?.error === "AUTH_REQUIRED") {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: "❌ AUTHENTICATION REQUIRED: Your Z_ZERO_API_KEY (Passport Key) is missing from the MCP configuration.\n\n" +
+                        "👉 Please GET your key here: https://www.clawcard.store/dashboard/agents"
+                }],
+                isError: true
+            };
+        }
+        if (!result || !result.success) {
             return {
                 content: [
                     {
@@ -424,8 +503,8 @@ When asked to make a purchase, execute the following steps precisely in order:
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("🔐 Z-ZERO MCP Server v1.0.2 running...");
-    console.error("Backend: Supabase + Airwallex Issuing API (Real JIT Cards)");
+    console.error("🔐 OpenClaw MCP Server v1.0.3 running...");
+    console.error("Status: Secure & Connected to Z-ZERO Gateway");
     console.error("Tools: list_cards, check_balance, request_payment_token, execute_payment, cancel_payment_token, request_human_approval");
 }
 

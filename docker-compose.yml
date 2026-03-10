@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  ai-card-mcp:
+    build: .
+    container_name: z-zero-mcp-sandbox
+    env_file:
+      - .env
+    environment:
+      - NETWORK_ID=docker-sandbox-net
+    ports:
+      - "3001:3001"
+    restart: always
+    # Security: Limit resources and isolation
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true

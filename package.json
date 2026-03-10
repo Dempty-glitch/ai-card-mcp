@@ -1,13 +1,14 @@
 {
     "name": "z-zero-mcp-server",
-    "version": "1.0.2",
+    "version": "1.0.5",
     "description": "Z-ZERO MCP Server — Secure JIT Virtual Card Payment tools for AI Agents (Claude, AutoGPT, CrewAI) — Real Airwallex Mastercards",
     "main": "dist/index.js",
     "bin": "dist/index.js",
     "scripts": {
         "build": "tsc",
         "start": "node dist/index.js",
-        "dev": "npx tsx src/index.ts"
+        "dev": "npx tsx src/index.ts",
+        "postinstall": "echo 'IMPORTANT: Run \"npx playwright install chromium\" to enable automated checkouts.'"
     },
     "keywords": [
         "mcp",
@@ -28,14 +29,13 @@
     ],
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.12.1",
-        "@supabase/supabase-js": "^2.49.4",
         "dotenv": "^16.5.0",
         "playwright": "^1.52.0",
         "zod": "^3.25.11"
     },
     "devDependencies": {
-        "typescript": "^5.8.3",
+        "@types/node": "^22.15.21",
         "tsx": "^4.19.4",
-        "@types/node": "^22.15.21"
+        "typescript": "^5.8.3"
     }
 }
