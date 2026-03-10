@@ -74,6 +74,9 @@ export async function issueTokenRemote(
 
     if (!data) return null;
 
+    // Forward API errors (402 insufficient, 429 max cards, etc.)
+    if (data.error) return data;
+
     // Adapt Dashboard API response to MCP expected format
     return {
         token: data.token,
@@ -81,7 +84,7 @@ export async function issueTokenRemote(
         amount: amount,
         merchant: merchant,
         created_at: Date.now(),
-        ttl_seconds: 1800, // Matching Dashboard TTL
+        ttl_seconds: 1800,
         used: false
     };
 }

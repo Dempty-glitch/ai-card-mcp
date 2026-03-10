@@ -214,6 +214,16 @@ server.tool(
             };
         }
         if (!token || token.error) {
+            // Show actual API error if available (e.g. 429 max cards, 402 insufficient)
+            if (token?.message) {
+                return {
+                    content: [{
+                        type: "text" as const,
+                        text: `❌ ${token.message}`
+                    }],
+                    isError: true,
+                };
+            }
             const balanceData = await getBalanceRemote(card_alias);
             const balance = balanceData?.balance;
             return {
