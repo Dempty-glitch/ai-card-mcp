@@ -338,7 +338,7 @@ server.tool(
 // ============================================================
 server.tool(
     "cancel_payment_token",
-    "Cancel a payment token that has not been used yet. This will cancel the Airwallex card and refund the full amount back to the wallet. Use this when: (1) checkout price is higher than token amount, (2) purchase is no longer needed, or (3) human requests cancellation. IMPORTANT: Do NOT auto-cancel without human awareness — always inform the human first.",
+    "Cancel a payment token that has not been used yet. This will cancel the virtual card at the issuing network and refund the full amount back to the wallet. Use this when: (1) checkout price is higher than token amount, (2) purchase is no longer needed, or (3) human requests cancellation. IMPORTANT: Do NOT auto-cancel without human awareness — always inform the human first.",
     {
         token: z
             .string()
