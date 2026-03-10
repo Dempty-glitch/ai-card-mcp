@@ -58,7 +58,7 @@ server.tool(
         }
         const cards = data?.cards || [];
         const activeTokens = data?.active_tokens || [];
-        const recentTokens = data?.recent_tokens || [];
+        const historySummary = data?.history_summary || {};
         return {
             content: [
                 {
@@ -67,8 +67,8 @@ server.tool(
                         {
                             cards,
                             active_tokens: activeTokens,
-                            recent_tokens: recentTokens,
-                            note: "Use card aliases to request payment tokens. Never ask for real card numbers.",
+                            history_summary: historySummary,
+                            note: "Only active tokens are shown. Use card aliases to request payment tokens.",
                         },
                         null,
                         2
