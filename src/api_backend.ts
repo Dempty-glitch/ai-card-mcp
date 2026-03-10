@@ -51,7 +51,11 @@ export async function getBalanceRemote(cardAlias: string): Promise<any> {
     const cards = data?.cards || [];
     const card = cards.find((c: any) => c.alias === cardAlias);
     if (!card) return null;
-    return { balance: card.balance, currency: card.currency };
+    return {
+        wallet_balance: card.balance,
+        currency: card.currency,
+        note: "This is the total wallet balance (human-level). Cards have 'limits' set at creation, not 'balances'. Use list_cards to see active token limits."
+    };
 }
 
 export async function getDepositAddressesRemote(): Promise<any> {

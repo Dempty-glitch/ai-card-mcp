@@ -84,7 +84,7 @@ server.tool(
 // ============================================================
 server.tool(
     "check_balance",
-    "Check the remaining balance of a virtual card by its alias.",
+    "Check the wallet balance (human-level total). This is the spendable USD available for issuing new cards. Cards themselves have 'limits' (set at creation), not 'balances' — use list_cards to see active token limits.",
     {
         card_alias: z
             .string()
