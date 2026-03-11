@@ -6,6 +6,7 @@ import type { CardData, PaymentToken } from "./types.js";
 
 const API_BASE_URL = process.env.Z_ZERO_API_BASE_URL || "https://www.clawcard.store";
 const PASSPORT_KEY = process.env.Z_ZERO_API_KEY || "";
+const INTERNAL_SECRET = process.env.Z_ZERO_INTERNAL_SECRET || "";
 
 if (!PASSPORT_KEY) {
     console.error("❌ ERROR: Z_ZERO_API_KEY (Passport Key) is missing!");
@@ -34,6 +35,34 @@ async function apiRequest(endpoint: string, method: string = 'GET', body: any = 
             return { error: "API_ERROR", message: err.error || res.statusText };
         }
 
+        return await res.json();
+    } catch (err: any) {
+        console.error(`[NETWORK ERROR] ${endpoint}:`, err.message);
+        return { error: "NETWORK_ERROR", message: err.message };
+    }
+}
+
+// Internal API calls that require INTERNAL_SECRET (resolve PAN, burn token)
+async function internalApiRequest(endpoint: string, method: string, body: any) {
+    if (!INTERNAL_SECRET) {
+        console.error("[MCP] Z_ZERO_INTERNAL_SECRET is missing — cannot call secure endpoints");
+        return { error: "CONFIG_ERROR", message: "INTERNAL_SECRET not configured" };
+    }
+    const url = `${API_BASE_URL.replace(/\/$/, '')}${endpoint}`;
+    try {
+        const res = await fetch(url, {
+            method,
+            headers: {
+                "x-internal-secret": INTERNAL_SECRET,
+                "Content-Type": "application/json",
+            },
+            body: body ? JSON.stringify(body) : null,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: res.statusText }));
+            console.error(`[INTERNAL API ERROR] ${endpoint}:`, err.error);
+            return { error: "API_ERROR", message: err.error || res.statusText };
+        }
         return await res.json();
     } catch (err: any) {
         console.error(`[NETWORK ERROR] ${endpoint}:`, err.message);
@@ -94,8 +123,9 @@ export async function issueTokenRemote(
 }
 
 export async function resolveTokenRemote(token: string): Promise<CardData | null> {
-    const data = await apiRequest('/api/tokens/resolve', 'POST', { token });
-    if (!data) return null;
+    // Uses INTERNAL_SECRET — this endpoint returns real PAN/CVV
+    const data = await internalApiRequest('/api/tokens/resolve', 'POST', { token });
+    if (!data || data.error) return data;
 
     return {
         number: data.number,
@@ -107,12 +137,13 @@ export async function resolveTokenRemote(token: string): Promise<CardData | null
 }
 
 export async function burnTokenRemote(token: string, receipt_id?: string): Promise<boolean> {
-    const data = await apiRequest('/api/tokens/burn', 'POST', {
+    // Uses INTERNAL_SECRET — burn endpoint requires it
+    const data = await internalApiRequest('/api/tokens/burn', 'POST', {
         token,
         receipt_id,
         success: true
     });
-    return !!data;
+    return !!data && !data.error;
 }
 
 export async function cancelTokenRemote(token: string): Promise<any> {

@@ -250,6 +250,7 @@ server.tool(
                     text: JSON.stringify(
                         {
                             token: token.token,
+                            token_ref: `...${token.token.slice(-6)}`,
                             amount: token.amount,
                             merchant: token.merchant,
                             expires_at: expiresAt,
