@@ -313,8 +313,32 @@ server.tool(
         // Step 2: Use Playwright to inject card into checkout form
         const result = await fillCheckoutForm(checkout_url, cardData);
 
-        // Step 3: Burn the token (wallet was pre-debited at issue time)
-        await burnTokenRemote(token);
+        // Step 3: Burn the token ONLY if payment succeeded
+        // If merchant declines → keep token ACTIVE so webhook decline flow can refund correctly
+        if (result.success) {
+            await burnTokenRemote(token);
+        } else {
+            // Payment failed — do NOT burn token
+            // Airwallex will fire a 'card.authorization.declined' webhook → refund handled there
+            return {
+                content: [
+                    {
+                        type: "text" as const,
+                        text: JSON.stringify(
+                            {
+                                success: false,
+                                message: result.message || "Payment was declined by merchant.",
+                                token_status: "ACTIVE",
+                                note: "Token NOT burned. Funds will be refunded automatically via webhook within minutes.",
+                            },
+                            null,
+                            2
+                        ),
+                    },
+                ],
+                isError: true,
+            };
+        }
 
         // Step 4: Refund underspend if actual amount was less than token amount
         if (actual_amount !== undefined && result.success) {
