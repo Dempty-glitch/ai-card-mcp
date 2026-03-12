@@ -132,7 +132,8 @@ export async function resolveTokenRemote(token: string): Promise<CardData | null
         exp_month: data.exp?.split('/')[0] || "12",
         exp_year: "20" + (data.exp?.split('/')[1] || "30"),
         cvv: data.cvv || "123",
-        name: data.name || "Z-ZERO AI AGENT"
+        name: data.name || "Z-ZERO AI AGENT",
+        authorized_amount: data.authorized_amount ? Number(data.authorized_amount) : undefined,
     };
 }
 

@@ -311,6 +311,33 @@ server.tool(
             };
         }
 
+        // 🔒 PRE-FLIGHT AMOUNT GUARD (Prompt Injection Defense)
+        // If the agent passes actual_amount, verify it doesn't exceed the token's authorized amount.
+        // Tolerance: 5% to allow for minor price rounding (e.g., taxes calculated at checkout).
+        // Attack scenario: Merchant shows $99 on page, but agent was authorized $10 → block + alert human.
+        if (actual_amount !== undefined && cardData.authorized_amount !== undefined) {
+            const tokenAmount = Number(cardData.authorized_amount);
+            const TOLERANCE = 1.05; // 5% buffer
+            if (actual_amount > tokenAmount * TOLERANCE) {
+                // Auto-cancel the token to free up funds
+                await cancelTokenRemote(token);
+                return {
+                    content: [{
+                        type: "text" as const,
+                        text: JSON.stringify({
+                            success: false,
+                            blocked: true,
+                            reason: "PRICE_MISMATCH",
+                            message: `🚨 PAYMENT BLOCKED: Checkout shows $${actual_amount} but token only authorizes $${tokenAmount}. Token has been cancelled and funds returned to wallet.`,
+                            token_status: "CANCELLED",
+                            action_required: "Request a new token with the correct amount if you wish to proceed.",
+                        }, null, 2),
+                    }],
+                    isError: true,
+                };
+            }
+        }
+
         // Step 2: Use Playwright to inject card into checkout form
         const result = await fillCheckoutForm(checkout_url, cardData);
 

@@ -31,6 +31,7 @@ export interface CardData {
     exp_year: string;
     cvv: string;
     name: string;
+    authorized_amount?: number;  // Amount authorized when token was issued (for pre-flight guard)
     error?: string;
     message?: string;
 }

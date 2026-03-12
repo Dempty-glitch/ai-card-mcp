@@ -3,10 +3,14 @@
 
 import { chromium } from "playwright";
 import type { CardData, PaymentResult } from "./types.js";
+import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
+
+const CHECKOUT_HARD_TIMEOUT_MS = 60_000; // 60s absolute cap — prevents slow-loris attacks
 
 /**
  * Detects and fills credit card form fields on a checkout page.
  * Card data exists ONLY in RAM and is wiped after injection.
+ * Hard timeout of 60s prevents merchant page from hanging indefinitely.
  */
 export async function fillCheckoutForm(
     checkoutUrl: string,
@@ -16,8 +20,41 @@ export async function fillCheckoutForm(
     const context = await browser.newContext();
     const page = await context.newPage();
 
+    // 🔒 Wrap entire checkout flow in 60s hard timeout
+    // onTimeout: force-close browser to free memory
     try {
-        await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        return await withTimeout(
+            _fillCheckoutFormInner(page, cardData),
+            CHECKOUT_HARD_TIMEOUT_MS,
+            'fillCheckoutForm',
+            async () => {
+                console.error('[PLAYWRIGHT] ⚠️ Hard timeout hit — force-closing browser');
+                await browser.close().catch(() => {});
+            }
+        );
+    } catch (err: unknown) {
+        if (err instanceof TimeoutError) {
+            return {
+                success: false,
+                message: `Checkout timed out after ${CHECKOUT_HARD_TIMEOUT_MS / 1000}s. The merchant page may be too slow or blocking automation.`,
+            };
+        }
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return { success: false, message: `Payment failed: ${errMsg}` };
+    } finally {
+        // RAM wipe happens inside _fillCheckoutFormInner's finally block
+        // Ensure browser is closed even if timeout cleanup failed
+        await browser.close().catch(() => {});
+    }
+}
+
+/** Internal implementation — called by fillCheckoutForm inside a timeout wrapper */
+async function _fillCheckoutFormInner(
+    page: import("playwright").Page,
+    cardData: CardData
+): Promise<PaymentResult> {
+    try {
+
 
         // ============================================================
         // STRATEGY 1: Standard HTML form fields
@@ -220,7 +257,6 @@ export async function fillCheckoutForm(
         cardData.exp_month = "00";
         cardData.exp_year = "0000";
         cardData.name = "";
-
-        await browser.close();
+        // Note: browser.close() is handled by fillCheckoutForm's outer finally block
     }
 }
