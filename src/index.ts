@@ -1,30 +1,49 @@
 #!/usr/bin/env node
-// OpenClaw MCP Server (z-zero-mcp-server) v1.0.3
+// OpenClaw MCP Server (z-zero-mcp-server) v1.1.0
 // Exposes secure JIT payment tools to AI Agents via Model Context Protocol
 // Status: Connected to Z-ZERO Gateway — produces secure JIT virtual cards
+// WDK Mode: Set Z_ZERO_WALLET_MODE=wdk for non-custodial WDK payments
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import {
-    issueTokenRemote,
-    resolveTokenRemote,
-    burnTokenRemote,
-    cancelTokenRemote,
-    refundUnderspendRemote,
-    getBalanceRemote,
-    listCardsRemote,
-    getDepositAddressesRemote,
-} from "./api_backend.js";
+// ── Backend selection (resolved at startup, before server init) ──────────────
+// tsx / Node ESM: import() is async, so we use a synchronous pattern here.
+// Both backends export identical function signatures (drop-in swap).
+const WALLET_MODE = process.env.Z_ZERO_WALLET_MODE || "custodial";
+const isWDKMode = WALLET_MODE === "wdk";
+
+// Import both backends; pick which one to use based on env var.
+// In production build, tree-shaking will handle this. In dev (tsx), both load.
+import * as custodialBackend from "./api_backend.js";
+import * as wdkBackend from "./wdk_backend.js";
+
+const activeBackend = isWDKMode ? wdkBackend : custodialBackend;
+
+const issueTokenRemote = activeBackend.issueTokenRemote;
+const resolveTokenRemote = activeBackend.resolveTokenRemote;
+const burnTokenRemote = activeBackend.burnTokenRemote;
+const cancelTokenRemote = activeBackend.cancelTokenRemote;
+const refundUnderspendRemote = activeBackend.refundUnderspendRemote;
+const getBalanceRemote = activeBackend.getBalanceRemote;
+const listCardsRemote = activeBackend.listCardsRemote;
+const getDepositAddressesRemote = activeBackend.getDepositAddressesRemote;
+
+console.error(`[Z-ZERO MCP] 🚀 Wallet mode: ${WALLET_MODE.toUpperCase()}`);
+// ────────────────────────────────────────────────────────────────────────────
+
 import { fillCheckoutForm } from "./playwright_bridge.js";
+import { detectWeb3Payment } from "./lib/web3-detector.js";
+import { extractTotalPrice } from "./lib/extract-total-price.js";
+import { chromium } from "playwright";
 
 // ============================================================
 // CREATE MCP SERVER
 // ============================================================
 const server = new McpServer({
     name: "z-zero-mcp-server",
-    version: "1.0.3",
+    version: "2.0.0",
 });
 
 // ============================================================
@@ -504,6 +523,269 @@ server.tool(
 );
 
 // ============================================================
+// TOOL 7: Auto Pay Checkout (Phase 2 — Smart Routing)
+// ============================================================
+server.tool(
+    "auto_pay_checkout",
+    "[Phase 2] Autonomous Smart Routing checkout tool. Provide a checkout URL and this tool will:\n" +
+    "1. Scan the page to detect if it supports Web3 (Crypto) payments via window.ethereum or EIP-681 links.\n" +
+    "2. SCENARIO A (Web3): If detected, automatically send USDT on-chain via WDK (gas ~$0.001). No Visa card needed.\n" +
+    "3. SCENARIO B (Fiat): If no Web3 detected, scan DOM for total price, issue a JIT Visa card for exact amount, auto-fill form.",
+    {
+        checkout_url: z
+            .string()
+            .url()
+            .describe("Full URL of the checkout/payment page to analyze and pay."),
+        card_alias: z
+            .string()
+            .describe("Card alias to charge for JIT Fiat fallback, e.g. 'Card_01'. Required even if Web3 route is used (used for WDK wallet lookup)."),
+    },
+    async ({ checkout_url, card_alias }) => {
+        const ZZERO_API = process.env.Z_ZERO_API_BASE || "https://www.clawcard.store";
+        const API_KEY = process.env.Z_ZERO_API_KEY || "";
+
+        // ── C2 FIX: API key guard ────────────────────────────────────────────
+        if (!API_KEY) {
+            return {
+                content: [{ type: "text" as const, text: JSON.stringify({
+                    status: "CONFIG_ERROR",
+                    message: "Z_ZERO_API_KEY is not configured on this MCP server. Cannot proceed.",
+                }, null, 2) }],
+                isError: true,
+            };
+        }
+
+        // ── C1 FIX: SSRF guard — validate checkout_url ───────────────────────
+        // Block non-https and internal/private IP ranges
+        (() => {
+            let url: URL;
+            try { url = new URL(checkout_url); } catch {
+                throw new Error(`Invalid checkout_url: ${checkout_url}`);
+            }
+            if (url.protocol !== "https:") {
+                throw new Error(`checkout_url must use HTTPS. Got: ${url.protocol}`);
+            }
+            const hostname = url.hostname;
+            const privatePatterns = [
+                /^localhost$/i,
+                /^127\./,
+                /^10\./,
+                /^172\.(1[6-9]|2\d|3[01])\./,
+                /^192\.168\./,
+                /^169\.254\./,   // AWS metadata / link-local
+                /^\[::1\]$/, // IPv6 loopback
+                /^0\.0\.0\.0$/,
+            ];
+            if (privatePatterns.some(p => p.test(hostname))) {
+                throw new Error(`SSRF blocked: checkout_url points to private/internal host: ${hostname}`);
+            }
+        })();
+
+        // ── STEP A: Try to detect Web3 payment on the page ──────────────────
+        console.error(`[SMART ROUTE] Scanning ${checkout_url} for Web3 payment...`);
+        const web3Result = await detectWeb3Payment(checkout_url);
+
+        if (web3Result.detected && web3Result.params) {
+            // ── SCENARIO A: Web3 Payment Detected ────────────────────────────
+            const { to, eip681_amount, data } = web3Result.params;
+
+            // If amount is baked into EIP-681 link, use it. Otherwise need user to confirm.
+            if (!eip681_amount && !data) {
+                return {
+                    content: [{
+                        type: "text" as const,
+                        text: JSON.stringify({
+                            route: "WEB3",
+                            detected: true,
+                            status: "AMOUNT_REQUIRED",
+                            recipient: to,
+                            message: `Web3 payment gateway detected (${web3Result.method}), recipient: ${to}. Could not determine exact USDT amount automatically. Please confirm the amount with the user, then call this tool again with the amount in the checkout_url or use pay_crypto(to=${to}, amount=<confirmed_amount>).`,
+                        }, null, 2),
+                    }],
+                };
+            }
+
+            // Call backend WDK transfer API
+            let amount = eip681_amount ?? 0;
+
+            // Decode ERC-20 transfer amount from calldata if EIP-681 amount not available
+            if (!amount && data && data.length >= 138) {
+                const amountHex = data.slice(-64);
+                const amountRaw = BigInt(`0x${amountHex}`);
+                amount = Number(amountRaw) / 1_000_000;
+            }
+
+            // Guard: if we still can't determine amount, ask user
+            if (!amount || amount <= 0) {
+                return {
+                    content: [{
+                        type: "text" as const,
+                        text: JSON.stringify({
+                            route: "WEB3",
+                            detected: true,
+                            status: "AMOUNT_REQUIRED",
+                            recipient: to,
+                            message: `Web3 tx detected but could not decode USDT amount from calldata. Please confirm the exact amount with the user and use pay_crypto(to=${to}, amount=<amount>).`,
+                        }, null, 2),
+                    }],
+                };
+            }
+
+            const resp = await fetch(`${ZZERO_API}/api/wdk/transfer`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-passport-key": API_KEY,
+                },
+                body: JSON.stringify({ to, amount, card_alias }),
+            });
+
+            const txResult = await resp.json() as { success?: boolean; txHash?: string; error?: string; message?: string };
+
+            if (!resp.ok || !txResult.success) {
+                return {
+                    content: [{
+                        type: "text" as const,
+                        text: JSON.stringify({
+                            route: "WEB3",
+                            status: "FAILED",
+                            reason: txResult.message || txResult.error || "Unknown error from WDK transfer API",
+                        }, null, 2),
+                    }],
+                    isError: true,
+                };
+            }
+
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        route: "WEB3",
+                        method: web3Result.method,
+                        status: "SUCCESS",
+                        recipient: to,
+                        amount_usdt: amount,
+                        tx_hash: txResult.txHash,
+                        message: `✅ Web3 payment sent on-chain! ${amount} USDT → ${to}. Tx: ${txResult.txHash}`,
+                        gas_savings: "~$0.001 (ERC-4337 Paymaster, gasless for user)",
+                    }, null, 2),
+                }],
+            };
+        }
+
+        // ── SCENARIO B: No Web3 — Fiat JIT Card fallback ────────────────────
+        console.error(`[SMART ROUTE] No Web3 detected. Scanning DOM for total price...`);
+
+        // Open browser to read price AND fill form (single browser session)
+        let totalPrice: number | null = null;
+        const browser = await chromium.launch({ headless: true });
+        let page: import("playwright").Page | null = null;
+        try {
+            page = await browser.newPage();
+            await page.goto(checkout_url, { waitUntil: "domcontentloaded", timeout: 20_000 });
+            totalPrice = await extractTotalPrice(page);
+        } catch {
+            await browser.close().catch(() => {});
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        route: "FIAT",
+                        status: "PAGE_LOAD_FAILED",
+                        message: "Could not load the checkout page. Check URL and try again.",
+                    }, null, 2),
+                }],
+                isError: true,
+            };
+        }
+
+        if (!totalPrice) {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        route: "FIAT",
+                        status: "PRICE_NOT_FOUND",
+                        message: "Could not automatically detect the total price on this page. Please manually confirm the exact checkout price and use request_payment_token + execute_payment instead.",
+                    }, null, 2),
+                }],
+                isError: true,
+            };
+        }
+
+        if (totalPrice < 1 || totalPrice > 100) {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        route: "FIAT",
+                        status: "AMOUNT_OUT_OF_RANGE",
+                        detected_price: totalPrice,
+                        message: `Detected price $${totalPrice} is outside the JIT card limit ($1-$100). Please confirm with user and use request_payment_token manually.`,
+                    }, null, 2),
+                }],
+                isError: true,
+            };
+        }
+
+        // Issue JIT card for exactly the detected total
+        console.error(`[SMART ROUTE] Fiat route: issuing JIT card for $${totalPrice}`);
+        const token = await issueTokenRemote(card_alias, totalPrice, checkout_url);
+        if (!token || token.error) {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        route: "FIAT",
+                        status: "TOKEN_ISSUE_FAILED",
+                        message: token?.message || "Could not issue JIT card. Check balance or card alias.",
+                    }, null, 2),
+                }],
+                isError: true,
+            };
+        }
+
+        // Resolve token and auto-fill form
+        const cardData = await resolveTokenRemote(token.token);
+        if (!cardData || cardData.error) {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        route: "FIAT",
+                        status: "CARD_RESOLVE_FAILED",
+                        message: "Failed to resolve JIT card data. Token may have expired.",
+                    }, null, 2),
+                }],
+                isError: true,
+            };
+        }
+
+        const fillResult = await fillCheckoutForm(checkout_url, cardData);
+        if (fillResult.success) {
+            await burnTokenRemote(token.token);
+        }
+
+        return {
+            content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                    route: "FIAT",
+                    status: fillResult.success ? "SUCCESS" : "FILL_FAILED",
+                    detected_price: totalPrice,
+                    jit_card_issued: true,
+                    message: fillResult.success
+                        ? `✅ JIT Visa card issued for $${totalPrice} and checkout filled successfully.`
+                        : `❌ JIT card issued but checkout form fill failed: ${fillResult.message}`,
+                    receipt_id: fillResult.receipt_id || null,
+                }, null, 2),
+            }],
+            isError: !fillResult.success,
+        };
+    }
+)
+
+// ============================================================
 // RESOURCE: Z-ZERO Autonomous Payment SOP
 // ============================================================
 server.resource(
@@ -565,9 +847,9 @@ When asked to make a purchase, execute the following steps precisely in order:
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("🔐 OpenClaw MCP Server v1.0.3 running...");
+    console.error("🔐 OpenClaw MCP Server v2.0.0 running (Phase 2: Smart Routing enabled)...");
     console.error("Status: Secure & Connected to Z-ZERO Gateway");
-    console.error("Tools: list_cards, check_balance, request_payment_token, execute_payment, cancel_payment_token, request_human_approval");
+    console.error("Tools: list_cards, check_balance, request_payment_token, execute_payment, cancel_payment_token, request_human_approval, auto_pay_checkout");
 }
 
 main().catch(console.error);
