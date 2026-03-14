@@ -99,13 +99,17 @@ export async function detectWeb3Payment(
             const href = links[0] ?? inlineMatch?.[0] ?? null;
             if (!href) return null;
 
-            // Parse: ethereum:0xaaaa...@137/transfer?address=0xbbbb&uint256=10000000
-            const addrMatch = href.match(/ethereum:(0x[0-9a-fA-F]{40})/);
+            // Parse: ethereum:0xCONTRACT@137/transfer?address=0xRECIPIENT&uint256=10000000
+            const contractMatch = href.match(/ethereum:(0x[0-9a-fA-F]{40})/);
             const chainMatch = href.match(/@(\d+)/);
             const uint256Match = href.match(/uint256=(\d+)/);
+            // ✅ BUG 6 FIX: Parse recipient from 'address=' query param (not the contract address)
+            const recipientMatch = href.match(/[?&]address=(0x[0-9a-fA-F]{40})/);
 
             return {
-                to: addrMatch?.[1] ?? null,
+                // Prefer recipient address from query param; fall back to contract only as last resort
+                to: recipientMatch?.[1] ?? contractMatch?.[1] ?? null,
+                contract: contractMatch?.[1] ?? null,   // USDT contract (kept for logging)
                 chainId: chainMatch ? parseInt(chainMatch[1]) : 137,
                 uint256: uint256Match?.[1] ?? null,
                 raw: href,
@@ -116,7 +120,7 @@ export async function detectWeb3Payment(
             const usdtAmount = eip681Result.uint256
                 ? parseInt(eip681Result.uint256) / 1_000_000  // USDT has 6 decimals
                 : null;
-            console.error(`[WEB3] ✅ EIP-681 detected: to=${eip681Result.to}, amount=${usdtAmount} USDT`);
+            console.error(`[WEB3] ✅ EIP-681 detected: recipient=${eip681Result.to}, contract=${eip681Result.contract}, amount=${usdtAmount} USDT`);
             return {
                 detected: true,
                 method: "EIP-681",
@@ -125,12 +129,30 @@ export async function detectWeb3Payment(
                     chainId: eip681Result.chainId,
                     eip681_amount: usdtAmount ?? undefined,
                 },
-                message: `EIP-681 payment link found. Recipient: ${eip681Result.to}, amount: ${usdtAmount} USDT.`,
+                message: `EIP-681 payment link found. Merchant: ${eip681Result.to}, amount: ${usdtAmount} USDT.`,
             };
         }
 
         // ─── Strategy B: Wait for eth_sendTransaction after clicking "Pay" ────
-        // Wait up to WEB3_DETECT_TIMEOUT_MS ms for the page to trigger a tx.
+        // ✅ BUG 5 FIX: Auto-click common Web3 pay buttons so DApp triggers eth_sendTransaction
+        const web3ButtonSelectors = [
+            'button:has-text("MetaMask")', 'button:has-text("Pay with Crypto")',
+            'button:has-text("Connect Wallet")', 'button:has-text("Pay with Web3")',
+            'button:has-text("Pay with Wallet")', '#pay-metamask-btn',
+            '[class*="web3"] button', '[class*="metamask"] button',
+        ];
+        for (const sel of web3ButtonSelectors) {
+            try {
+                const btn = await page.$(sel);
+                if (btn && await btn.isVisible()) {
+                    console.error(`[WEB3] Clicking Web3 pay button: ${sel}`);
+                    await btn.click();
+                    break;
+                }
+            } catch { /* selector may not exist — continue */ }
+        }
+
+        // Poll for captured tx (window.ethereum.request intercepted by mock)
         const capturedTx = await Promise.race([
             // Poll for captured tx
             (async () => {

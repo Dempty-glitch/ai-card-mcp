@@ -562,22 +562,23 @@ server.tool(
             try { url = new URL(checkout_url); } catch {
                 throw new Error(`Invalid checkout_url: ${checkout_url}`);
             }
-            if (url.protocol !== "https:") {
-                throw new Error(`checkout_url must use HTTPS. Got: ${url.protocol}`);
-            }
+            const isDev = process.env.NODE_ENV !== "production";
             const hostname = url.hostname;
-            const privatePatterns = [
-                /^localhost$/i,
-                /^127\./,
-                /^10\./,
-                /^172\.(1[6-9]|2\d|3[01])\./,
-                /^192\.168\./,
-                /^169\.254\./,   // AWS metadata / link-local
-                /^\[::1\]$/, // IPv6 loopback
-                /^0\.0\.0\.0$/,
-            ];
-            if (privatePatterns.some(p => p.test(hostname))) {
-                throw new Error(`SSRF blocked: checkout_url points to private/internal host: ${hostname}`);
+            // ✅ BUG 4 FIX: Allow http://localhost in dev for testing local checkout pages
+            if (isDev && (hostname === "localhost" || hostname === "127.0.0.1")) {
+                console.error(`[SMART ROUTE] Dev mode: allowing localhost checkout URL`);
+            } else {
+                if (url.protocol !== "https:") {
+                    throw new Error(`checkout_url must use HTTPS. Got: ${url.protocol}`);
+                }
+                const privatePatterns = [
+                    /^localhost$/i, /^127\./, /^10\./,
+                    /^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./,
+                    /^169\.254\./, /^\[::1\]$/, /^0\.0\.0\.0$/,
+                ];
+                if (privatePatterns.some(p => p.test(hostname))) {
+                    throw new Error(`SSRF blocked: checkout_url points to private/internal host: ${hostname}`);
+                }
             }
         })();
 
@@ -676,27 +677,18 @@ server.tool(
         // ── SCENARIO B: No Web3 — Fiat JIT Card fallback ────────────────────
         console.error(`[SMART ROUTE] No Web3 detected. Scanning DOM for total price...`);
 
-        // Open browser to read price AND fill form (single browser session)
+        // ✅ BUG 1+2 FIX: Use try/finally so browser ALWAYS closes (even on success).
+        // fillCheckoutForm opens its own browser — this avoids triple browser + leak.
         let totalPrice: number | null = null;
-        const browser = await chromium.launch({ headless: true });
-        let page: import("playwright").Page | null = null;
+        const priceBrowser = await chromium.launch({ headless: true });
         try {
-            page = await browser.newPage();
-            await page.goto(checkout_url, { waitUntil: "domcontentloaded", timeout: 20_000 });
-            totalPrice = await extractTotalPrice(page);
+            const pricePage = await priceBrowser.newPage();
+            await pricePage.goto(checkout_url, { waitUntil: "domcontentloaded", timeout: 20_000 });
+            totalPrice = await extractTotalPrice(pricePage);
         } catch {
-            await browser.close().catch(() => {});
-            return {
-                content: [{
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        route: "FIAT",
-                        status: "PAGE_LOAD_FAILED",
-                        message: "Could not load the checkout page. Check URL and try again.",
-                    }, null, 2),
-                }],
-                isError: true,
-            };
+            // ignore — totalPrice stays null, handled below
+        } finally {
+            await priceBrowser.close().catch(() => {});  // ✅ Always close
         }
 
         if (!totalPrice) {

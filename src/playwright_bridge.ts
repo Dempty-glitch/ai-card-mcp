@@ -24,7 +24,7 @@ export async function fillCheckoutForm(
     // onTimeout: force-close browser to free memory
     try {
         return await withTimeout(
-            _fillCheckoutFormInner(page, cardData),
+            _fillCheckoutFormInner(page, checkoutUrl, cardData),  // ✅ BUG 8 FIX: pass URL
             CHECKOUT_HARD_TIMEOUT_MS,
             'fillCheckoutForm',
             async () => {
@@ -51,10 +51,12 @@ export async function fillCheckoutForm(
 /** Internal implementation — called by fillCheckoutForm inside a timeout wrapper */
 async function _fillCheckoutFormInner(
     page: import("playwright").Page,
+    checkoutUrl: string,   // ✅ BUG 8 FIX: need URL to navigate to
     cardData: CardData
 ): Promise<PaymentResult> {
     try {
-
+        // ✅ BUG 8 FIX: Navigate to the checkout page (was missing — page was blank!)
+        await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
 
         // ============================================================
         // STRATEGY 1: Standard HTML form fields
