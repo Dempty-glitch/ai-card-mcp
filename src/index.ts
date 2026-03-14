@@ -164,39 +164,57 @@ server.tool(
                 isError: true
             };
         }
+
+        // ── WDK Non-Custodial Mode ────────────────────────────────────────────
+        if (data?.wdk_wallet?.address) {
+            const wdkAddr = data.wdk_wallet.address;
+            const balance = data.wdk_wallet.balance_usdt ?? 0;
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        wallet_type: "non-custodial (WDK)",
+                        address: wdkAddr,
+                        balance_usdt: balance,
+                        supported_chains: [
+                            { chain: "Polygon", token: "USDT", address: wdkAddr },
+                        ],
+                        instructions: `Send USDT (Polygon/ERC-20) to this address: ${wdkAddr}. Funds will appear in your agent wallet within 1-3 minutes.`,
+                        note: "Gasless payments via ERC-4337 Paymaster. Your agent pays ~$0.001 in gas per tx."
+                    }, null, 2),
+                }],
+            };
+        }
+
+        // ── Custodial Mode Fallback ───────────────────────────────────────────
         const addresses = data?.deposit_addresses;
         if (!addresses) {
             return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: "Failed to retrieve deposit addresses. Please ensure your Z_ZERO_API_KEY (Passport Key) is valid. You can find it at https://www.clawcard.store/dashboard/agents",
-                    },
-                ],
+                content: [{
+                    type: "text" as const,
+                    text: "Failed to retrieve deposit addresses. Please ensure your Z_ZERO_API_KEY (Passport Key) is valid. You can find it at https://www.clawcard.store/dashboard/agents",
+                }],
                 isError: true,
             };
         }
         return {
-            content: [
-                {
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        networks: {
-                            evm: {
-                                address: addresses.evm,
-                                supported_chains: ["Base", "BNB Smart Chain (BSC)", "Ethereum"],
-                                tokens: ["USDC", "USDT"]
-                            },
-                            tron: {
-                                address: addresses.tron,
-                                supported_chains: ["Tron (TRC-20)"],
-                                tokens: ["USDT"]
-                            }
-                        },
-                        note: "Funds sent to these addresses will be automatically credited to your Z-ZERO balance within minutes."
-                    }, null, 2),
-                },
-            ],
+            content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                    wallet_type: "custodial",
+                    evm: {
+                        address: addresses.evm,
+                        supported_chains: ["Base", "BNB Smart Chain (BSC)", "Ethereum"],
+                        tokens: ["USDC", "USDT"]
+                    },
+                    tron: {
+                        address: addresses.tron,
+                        supported_chains: ["Tron (TRC-20)"],
+                        tokens: ["USDT"]
+                    },
+                    note: "Funds sent to these addresses will be automatically credited to your Z-ZERO balance within minutes."
+                }, null, 2),
+            }],
         };
     }
 );
