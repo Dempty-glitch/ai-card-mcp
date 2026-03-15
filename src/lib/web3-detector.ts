@@ -4,7 +4,7 @@
 // If the page calls eth_sendTransaction → capture params and return them.
 // If page is not Web3-aware → return null (caller falls back to Fiat JIT card).
 
-import { chromium } from "playwright";
+// chromium import removed — Single Browser Architecture: browser launched by caller (index.ts)
 
 export interface Web3TxParams {
     to: string;          // recipient address (merchant wallet)

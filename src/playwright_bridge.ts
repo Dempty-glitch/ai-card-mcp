@@ -102,7 +102,13 @@ async function _fillCheckoutFormInner(
     cardData: CardData
 ): Promise<PaymentResult> {
     try {
-        await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
+        // ✅ FIX: Skip navigation if page already loaded (Single Browser reuse from auto_pay_checkout)
+        // Prevents double-navigate which would reload page and lose cart/session state.
+        const currentUrl = page.url();
+        const baseCheckoutUrl = checkoutUrl.split("?")[0];
+        if (!currentUrl || currentUrl === "about:blank" || !currentUrl.startsWith(baseCheckoutUrl)) {
+            await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
+        }
 
         // ============================================================
         // STRATEGY 1: Standard HTML form fields

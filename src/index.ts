@@ -40,7 +40,7 @@ import { setPassportKey, getPassportKey } from "./lib/key-store.js"; // ✅ Hot-
 // ============================================================
 const server = new McpServer({
     name: "z-zero-mcp-server",
-    version: "2.0.0",
+    version: CURRENT_MCP_VERSION,
 });
 
 // ============================================================
@@ -594,7 +594,7 @@ server.tool(
     },
     async ({ checkout_url, card_alias }) => {
         const ZZERO_API = process.env.Z_ZERO_API_BASE || "https://www.clawcard.store";
-        const API_KEY = process.env.Z_ZERO_API_KEY || "";
+        const API_KEY = getPassportKey();  // ✅ FIX: use hot-swap key store, not process.env
 
         if (!API_KEY) {
             return {
@@ -716,7 +716,8 @@ server.tool(
             // Fill Form (Reusing the same page!)
             const fillResult = await fillCheckoutForm(checkout_url, cardData, page);
             if (fillResult.success) {
-                await burnTokenRemote(token.token);
+                const burnOk = await burnTokenRemote(token.token);
+                if (!burnOk) console.error(`[WARN] Token burn failed for ${token.token} — manual check needed`);
             }
 
             return {
@@ -806,7 +807,7 @@ When asked to make a purchase, execute the following steps precisely in order:
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("🔐 OpenClaw MCP Server v2.0.0 running (Phase 2: Smart Routing enabled)...");
+    console.error(`🔐 OpenClaw MCP Server v${CURRENT_MCP_VERSION} running (Phase 2: Smart Routing enabled)...`);
     console.error("Status: Secure & Connected to Z-ZERO Gateway");
     console.error("Tools: list_cards, check_balance, request_payment_token, execute_payment, cancel_payment_token, request_human_approval, auto_pay_checkout");
 }
