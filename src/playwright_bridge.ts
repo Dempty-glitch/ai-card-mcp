@@ -52,155 +52,205 @@ export async function fillCheckoutForm(
     }
 }
 
+// ============================================================
+// HELPER: Smart fill — handles both <input> and <select>
+// Prevents crash when dropdown uses <select> instead of <input>
+// ============================================================
+async function smartFill(el: import("playwright").ElementHandle, value: string): Promise<boolean> {
+    try {
+        const tag = await el.evaluate(e => (e as HTMLElement).tagName.toLowerCase());
+        if (tag === 'select') {
+            // Try by value first (most common: "01", "12", "2030")
+            try { await el.selectOption({ value }); return true; } catch { /* next */ }
+            // Try matching option label containing the value
+            try { await el.selectOption({ label: value }); return true; } catch { /* next */ }
+            // Last resort: numeric index (month "01" → index 1 if 0="Select...")
+            const idx = parseInt(value, 10);
+            if (!isNaN(idx)) {
+                try { await el.selectOption({ index: idx }); return true; } catch { /* give up */ }
+            }
+            return false;
+        } else {
+            await el.fill(value);
+            return true;
+        }
+    } catch {
+        return false;
+    }
+}
+
+/** Try each selector in order, smartFill the first match */
+async function tryFillField(
+    page: import("playwright").Page,
+    selectors: string[],
+    value: string
+): Promise<boolean> {
+    for (const selector of selectors) {
+        const el = await page.$(selector);
+        if (el) {
+            const ok = await smartFill(el, value);
+            if (ok) return true;
+        }
+    }
+    return false;
+}
+
 /** Internal implementation — called by fillCheckoutForm inside a timeout wrapper */
 async function _fillCheckoutFormInner(
     page: import("playwright").Page,
-    checkoutUrl: string,   // ✅ BUG 8 FIX: need URL to navigate to
+    checkoutUrl: string,
     cardData: CardData
 ): Promise<PaymentResult> {
     try {
-        // ✅ BUG 8 FIX: Navigate to the checkout page (was missing — page was blank!)
         await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
 
         // ============================================================
         // STRATEGY 1: Standard HTML form fields
+        // Covers: plain forms, Shopify, WooCommerce, custom checkouts
+        // Priority: autocomplete (W3C) → name → platform-specific → placeholder → aria-label
         // ============================================================
-        const standardSelectors = {
+        const S = {
             number: [
+                '[autocomplete="cc-number"]',
                 'input[name="cardnumber"]',
                 'input[name="card-number"]',
                 'input[name="cc-number"]',
-                'input[autocomplete="cc-number"]',
+                'input[name="card_number"]',
+                'input[name="checkout[payment][card_number]"]',       // Shopify
+                'input[id="wc-stripe-cc-number"]',                    // WooCommerce
                 'input[data-elements-stable-field-name="cardNumber"]',
                 'input[placeholder*="card number" i]',
-                'input[placeholder*="Card number" i]',
                 'input[aria-label*="card number" i]',
             ],
             expiry: [
+                '[autocomplete="cc-exp"]',
                 'input[name="exp-date"]',
                 'input[name="cc-exp"]',
-                'input[autocomplete="cc-exp"]',
+                'input[name="expiry"]',
+                'input[name="checkout[payment][card_expiry]"]',       // Shopify
                 'input[placeholder*="MM / YY" i]',
                 'input[placeholder*="MM/YY" i]',
                 'input[aria-label*="expir" i]',
             ],
             exp_month: [
-                'input[name="exp-month"]',
+                '[autocomplete="cc-exp-month"]',
                 'select[name="exp-month"]',
-                'input[autocomplete="cc-exp-month"]',
+                'select[name="exp_month"]',
+                'select[name="card_exp_month"]',
+                'select[id*="exp-month" i]',
+                'select[id*="exp_month" i]',
+                'input[name="exp-month"]',
+                'input[name="exp_month"]',
             ],
             exp_year: [
-                'input[name="exp-year"]',
+                '[autocomplete="cc-exp-year"]',
                 'select[name="exp-year"]',
-                'input[autocomplete="cc-exp-year"]',
+                'select[name="exp_year"]',
+                'select[name="card_exp_year"]',
+                'select[id*="exp-year" i]',
+                'select[id*="exp_year" i]',
+                'input[name="exp-year"]',
+                'input[name="exp_year"]',
             ],
             cvv: [
+                '[autocomplete="cc-csc"]',
                 'input[name="cvc"]',
                 'input[name="cvv"]',
                 'input[name="cc-csc"]',
-                'input[autocomplete="cc-csc"]',
+                'input[name="security_code"]',
+                'input[name="checkout[payment][card_cvc]"]',          // Shopify
+                'input[id="wc-stripe-cc-cvc"]',                       // WooCommerce
                 'input[placeholder*="CVC" i]',
                 'input[placeholder*="CVV" i]',
+                'input[placeholder*="security" i]',
                 'input[aria-label*="security code" i]',
+                'input[aria-label*="CVC" i]',
             ],
             name: [
+                '[autocomplete="cc-name"]',
                 'input[name="ccname"]',
                 'input[name="cc-name"]',
-                'input[autocomplete="cc-name"]',
+                'input[name="card-name"]',
+                'input[name="card_name"]',
                 'input[placeholder*="name on card" i]',
+                'input[placeholder*="cardholder" i]',
                 'input[aria-label*="name on card" i]',
             ],
         };
 
-        // Try to fill each field
         let filledFields = 0;
 
         // Card Number
-        for (const selector of standardSelectors.number) {
-            const el = await page.$(selector);
-            if (el) {
-                await el.fill(cardData.number);
-                filledFields++;
-                break;
-            }
-        }
+        if (await tryFillField(page, S.number, cardData.number)) filledFields++;
 
-        // Expiry (combined MM/YY format)
-        let expiryFilled = false;
-        for (const selector of standardSelectors.expiry) {
-            const el = await page.$(selector);
-            if (el) {
-                await el.fill(`${cardData.exp_month}/${cardData.exp_year.slice(-2)}`);
-                filledFields++;
-                expiryFilled = true;
-                break;
-            }
-        }
+        // Expiry: try combined MM/YY first
+        const expiryValue = `${cardData.exp_month}/${cardData.exp_year.slice(-2)}`;
+        let expiryFilled = await tryFillField(page, S.expiry, expiryValue);
+        if (expiryFilled) filledFields++;
 
-        // Expiry (separate month/year fields)
+        // Expiry: fallback to separate month + year (works with both <input> AND <select>)
         if (!expiryFilled) {
-            for (const selector of standardSelectors.exp_month) {
-                const el = await page.$(selector);
-                if (el) {
-                    await el.fill(cardData.exp_month);
-                    filledFields++;
-                    break;
-                }
-            }
-            for (const selector of standardSelectors.exp_year) {
-                const el = await page.$(selector);
-                if (el) {
-                    await el.fill(cardData.exp_year);
-                    filledFields++;
-                    break;
-                }
-            }
+            if (await tryFillField(page, S.exp_month, cardData.exp_month)) filledFields++;
+            if (await tryFillField(page, S.exp_year, cardData.exp_year)) filledFields++;
         }
 
         // CVV
-        for (const selector of standardSelectors.cvv) {
-            const el = await page.$(selector);
-            if (el) {
-                await el.fill(cardData.cvv);
-                filledFields++;
-                break;
-            }
-        }
+        if (await tryFillField(page, S.cvv, cardData.cvv)) filledFields++;
 
         // Name on Card
-        for (const selector of standardSelectors.name) {
-            const el = await page.$(selector);
-            if (el) {
-                await el.fill(cardData.name);
-                filledFields++;
-                break;
-            }
-        }
+        if (await tryFillField(page, S.name, cardData.name)) filledFields++;
 
         // ============================================================
         // STRATEGY 2: Stripe Elements (iframe-based)
+        // Stripe renders payment inputs inside iframes from js.stripe.com.
+        // Some merchants use __privateStripeFrame* named frames.
+        // Stripe has 2 modes:
+        //   - Unified: 1 iframe with all fields (card, exp, cvc in one)
+        //   - Split: separate iframes per field (cardNumber, cardExpiry, cardCvc)
+        // We handle both by scanning ALL matching Stripe frames.
         // ============================================================
         if (filledFields === 0) {
-            const stripeFrames = page.frames().filter((f) =>
-                f.url().includes("js.stripe.com")
-            );
+            const stripeFrames = page.frames().filter((f) => {
+                const url = f.url();
+                const name = f.name();
+                return url.includes('js.stripe.com')
+                    || url.includes('stripe.com/elements')
+                    || name.startsWith('__privateStripeFrame');
+            });
+
             for (const frame of stripeFrames) {
-                const cardInput = await frame.$('input[name="cardnumber"]');
-                if (cardInput) {
-                    await cardInput.fill(cardData.number);
-                    filledFields++;
+                // Card Number
+                for (const sel of [
+                    'input[name="cardnumber"]',
+                    'input[autocomplete="cc-number"]',
+                    'input[data-elements-stable-field-name="cardNumber"]',
+                ]) {
+                    const el = await frame.$(sel);
+                    if (el) { await el.fill(cardData.number); filledFields++; break; }
                 }
-                const expInput = await frame.$('input[name="exp-date"]');
-                if (expInput) {
-                    await expInput.fill(
-                        `${cardData.exp_month}${cardData.exp_year.slice(-2)}`
-                    );
-                    filledFields++;
+
+                // Expiry (Stripe uses MM/YY without slash)
+                for (const sel of [
+                    'input[name="exp-date"]',
+                    'input[autocomplete="cc-exp"]',
+                    'input[data-elements-stable-field-name="cardExpiry"]',
+                ]) {
+                    const el = await frame.$(sel);
+                    if (el) {
+                        await el.fill(`${cardData.exp_month}${cardData.exp_year.slice(-2)}`);
+                        filledFields++;
+                        break;
+                    }
                 }
-                const cvcInput = await frame.$('input[name="cvc"]');
-                if (cvcInput) {
-                    await cvcInput.fill(cardData.cvv);
-                    filledFields++;
+
+                // CVC
+                for (const sel of [
+                    'input[name="cvc"]',
+                    'input[autocomplete="cc-csc"]',
+                    'input[data-elements-stable-field-name="cardCvc"]',
+                ]) {
+                    const el = await frame.$(sel);
+                    if (el) { await el.fill(cardData.cvv); filledFields++; break; }
                 }
             }
         }
