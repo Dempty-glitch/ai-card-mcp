@@ -14,6 +14,9 @@ import { getPassportKey, hasPassportKey } from "./lib/key-store.js";
 const API_BASE_URL = process.env.Z_ZERO_API_BASE_URL || "https://www.clawcard.store";
 const INTERNAL_SECRET = process.env.Z_ZERO_INTERNAL_SECRET || "";
 
+// Injected at build time — always reflects the actual running version
+import { CURRENT_MCP_VERSION } from "./version.js";
+
 if (!hasPassportKey()) {
     console.error("❌ ERROR: Z_ZERO_API_KEY (Passport Key) is missing!");
     console.error("🔐 Get your key: https://www.clawcard.store/dashboard/agents");
@@ -36,6 +39,7 @@ async function apiRequest(endpoint: string, method: string = 'GET', body: any = 
             headers: {
                 "Authorization": `Bearer ${PASSPORT_KEY}`,
                 "Content-Type": "application/json",
+                "X-MCP-Version": CURRENT_MCP_VERSION,
             },
             body: body ? JSON.stringify(body) : null,
         });
@@ -60,6 +64,7 @@ async function internalApiRequest(endpoint: string, method: string, body: any) {
             headers: {
                 "x-internal-secret": INTERNAL_SECRET,
                 "Content-Type": "application/json",
+                "X-MCP-Version": CURRENT_MCP_VERSION,
             },
             body: body ? JSON.stringify(body) : null,
         });
@@ -93,26 +98,20 @@ export async function getBalanceRemote(cardAlias: string): Promise<any> {
     // finds connected WDK wallet, queries on-chain balance)
     const data = await apiRequest('/api/wdk/balance', 'GET');
     if (data?.error) {
-        // Fallback: try custodial balance if WDK not set up yet
-        const custodialData = await apiRequest('/api/tokens/cards', 'GET');
-        if (custodialData?.cards?.[0]) {
-            return {
-                wallet_balance: custodialData.cards[0].balance,
-                currency: 'USD',
-                mode: 'custodial_fallback',
-                note: 'WDK wallet not connected yet. Showing custodial balance.'
-            };
-        }
-        return data;
+        return {
+            error: true,
+            message: 'WDK wallet not connected. Create one at https://www.clawcard.store/dashboard/agent-wallet'
+        };
     }
 
     return {
         wallet_balance: data.balance_usdt,
         currency: 'USDT',
-        chain: data.chain || 'polygon',
+        chain: data.chain || 'ethereum',
         address: data.address,
+        tron_address: data.tron_address,
         mode: 'wdk_onchain',
-        note: `Non-custodial WDK wallet balance (live on-chain). Address: ${data.address}`
+        note: `Non-custodial WDK wallet. On-chain USDT balance. Address: ${data.address}`
     };
 }
 
@@ -124,23 +123,23 @@ export async function getDepositAddressesRemote(): Promise<any> {
     const data = await apiRequest('/api/wdk/balance', 'GET');
 
     if (data?.error) {
-        // Fallback to custodial addresses
-        const custodial = await apiRequest('/api/tokens/cards', 'GET');
         return {
-            ...custodial,
-            note: 'WDK wallet not connected. Showing custodial deposit addresses as fallback.'
+            error: true,
+            message: 'WDK wallet not connected. Create one at https://www.clawcard.store/dashboard/agent-wallet'
         };
     }
 
     return {
         cards: [{ alias: 'wdk-wallet', balance: data.balance_usdt, currency: 'USDT' }],
         deposit_addresses: {
-            polygon: data.address,     // Primary: USDT on Polygon (ERC-20)
-            note: 'Send USDT (Polygon/ERC-20) to fund your Agent wallet. Gasless payments via ERC-4337.'
+            ethereum: data.address,
+            tron: data.tron_address || null,
+            note: 'Send USDT to your WDK wallet. Gasless via ERC-4337 Paymaster (Ethereum) or GasFree (Tron).'
         },
         wdk_wallet: {
             address: data.address,
-            chain: data.chain || 'polygon',
+            tron_address: data.tron_address || null,
+            chain: data.chain || 'ethereum',
             balance_usdt: data.balance_usdt
         }
     };
@@ -180,10 +179,11 @@ export async function issueTokenRemote(
         amount,
         merchant,
         created_at: Date.now(),
-        ttl_seconds: 1800,
+        ttl_seconds: 3600,
         used: false,
-        tx_hash: data.tx_hash,   // On-chain tx hash (for transparency)
-        mode: 'wdk_noncustodial'
+        tx_hash: data.tx_hash,
+        mode: 'wdk_noncustodial',
+        mcp_warning: data._mcp_warning || null,  // Relay backend version warning to agent
     };
 }
 

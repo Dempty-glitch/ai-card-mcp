@@ -4,26 +4,18 @@
 // Status: Connected to Z-ZERO Gateway — produces secure JIT virtual cards
 // WDK Mode: Set Z_ZERO_WALLET_MODE=wdk for non-custodial WDK payments
 
-const CURRENT_MCP_VERSION = "1.1.0"; // ← bump this on every release
-const ZZERO_VERSION_API = "https://www.clawcard.store/api/version";
+export { CURRENT_MCP_VERSION } from "./version.js";
+import { CURRENT_MCP_VERSION } from "./version.js";
+// Note: version warnings are now delivered automatically via X-MCP-Version header
+// in each API call — no need for a separate check_for_updates tool.
 
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-// ── Backend selection (resolved at startup, before server init) ──────────────
-// tsx / Node ESM: import() is async, so we use a synchronous pattern here.
-// Both backends export identical function signatures (drop-in swap).
-const WALLET_MODE = process.env.Z_ZERO_WALLET_MODE || "custodial";
-const isWDKMode = WALLET_MODE === "wdk";
-
-// Import both backends; pick which one to use based on env var.
-// In production build, tree-shaking will handle this. In dev (tsx), both load.
-import * as custodialBackend from "./api_backend.js";
-import * as wdkBackend from "./wdk_backend.js";
-
-const activeBackend = isWDKMode ? wdkBackend : custodialBackend;
+// ── WDK Non-Custodial Backend (single backend, no custodial fallback) ─────────
+import * as activeBackend from "./wdk_backend.js";
 
 const issueTokenRemote = activeBackend.issueTokenRemote;
 const resolveTokenRemote = activeBackend.resolveTokenRemote;
@@ -34,8 +26,9 @@ const getBalanceRemote = activeBackend.getBalanceRemote;
 const listCardsRemote = activeBackend.listCardsRemote;
 const getDepositAddressesRemote = activeBackend.getDepositAddressesRemote;
 
-console.error(`[Z-ZERO MCP] 🚀 Wallet mode: ${WALLET_MODE.toUpperCase()}`);
+console.error(`[Z-ZERO MCP] 🚀 Pure WDK Non-Custodial Mode`);
 // ────────────────────────────────────────────────────────────────────────────
+
 
 import { fillCheckoutForm } from "./playwright_bridge.js";
 import { detectWeb3Payment } from "./lib/web3-detector.js";
@@ -174,55 +167,35 @@ server.tool(
         if (data?.wdk_wallet?.address) {
             const wdkAddr = data.wdk_wallet.address;
             const balance = data.wdk_wallet.balance_usdt ?? 0;
+            const tronAddr = data.wdk_wallet.tron_address;
             return {
                 content: [{
                     type: "text" as const,
                     text: JSON.stringify({
                         wallet_type: "non-custodial (WDK)",
-                        address: wdkAddr,
                         balance_usdt: balance,
                         supported_chains: [
-                            { chain: "Polygon", token: "USDT", address: wdkAddr },
+                            { chain: "Ethereum", token: "USDT", address: wdkAddr },
+                            ...(tronAddr ? [{ chain: "Tron", token: "USDT", address: tronAddr }] : []),
                         ],
-                        instructions: `Send USDT (Polygon/ERC-20) to this address: ${wdkAddr}. Funds will appear in your agent wallet within 1-3 minutes.`,
-                        note: "Gasless payments via ERC-4337 Paymaster. Your agent pays ~$0.001 in gas per tx."
+                        instructions: `Send USDT (Ethereum ERC-20) to: ${wdkAddr}${tronAddr ? `\nSend USDT (Tron TRC-20) to: ${tronAddr}` : ''}`,
+                        note: "Gasless payments via ERC-4337 Paymaster (Ethereum) / GasFree (Tron)."
                     }, null, 2),
                 }],
             };
         }
 
-        // ── Custodial Mode Fallback ───────────────────────────────────────────
-        const addresses = data?.deposit_addresses;
-        if (!addresses) {
-            return {
-                content: [{
-                    type: "text" as const,
-                    text: "Failed to retrieve deposit addresses. Please ensure your Z_ZERO_API_KEY (Passport Key) is valid. You can find it at https://www.clawcard.store/dashboard/agents",
-                }],
-                isError: true,
-            };
-        }
+        // No WDK wallet connected
         return {
             content: [{
                 type: "text" as const,
-                text: JSON.stringify({
-                    wallet_type: "custodial",
-                    evm: {
-                        address: addresses.evm,
-                        supported_chains: ["Base", "BNB Smart Chain (BSC)", "Ethereum"],
-                        tokens: ["USDC", "USDT"]
-                    },
-                    tron: {
-                        address: addresses.tron,
-                        supported_chains: ["Tron (TRC-20)"],
-                        tokens: ["USDT"]
-                    },
-                    note: "Funds sent to these addresses will be automatically credited to your Z-ZERO balance within minutes."
-                }, null, 2),
+                text: "No WDK wallet found. Please create one at https://www.clawcard.store/dashboard/agent-wallet",
             }],
+            isError: true,
         };
     }
 );
+
 
 // ============================================================
 // TOOL 3: Request a temporary payment token (issues secure JIT card)
@@ -299,6 +272,7 @@ server.tool(
                             card_issued: true,
                             instructions:
                                 "Use this token with execute_payment within 1 hour. IMPORTANT: If the actual checkout price is HIGHER than the token amount, do NOT proceed — call cancel_payment_token first and request a new token with the correct amount.",
+                            ...(token.mcp_warning ? { _mcp_warning: token.mcp_warning } : {}),
                         },
                         null,
                         2
@@ -542,60 +516,6 @@ server.tool(
                 },
             ],
         };
-    }
-);
-
-// ============================================================
-// TOOL 6.4: Check for Updates (polls clawcard.store, not npm)
-// ============================================================
-server.tool(
-    "check_for_updates",
-    "Check if a newer version of this MCP server is available. Polls clawcard.store/api/version — independent of npm so works even if distribution changes. Call this when: (1) user asks if MCP is up to date, (2) a payment fails and you want to rule out a stale MCP version.",
-    {},
-    async () => {
-        try {
-            const res = await fetch(ZZERO_VERSION_API, {
-                headers: { "User-Agent": `z-zero-mcp/${CURRENT_MCP_VERSION}` },
-                signal: AbortSignal.timeout(8_000),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json() as {
-                latest_version: string;
-                release_notes: string;
-                install_cmd: string;
-                update_instructions: Record<string, string>;
-            };
-
-            const latest = data.latest_version;
-            const isUpToDate = CURRENT_MCP_VERSION === latest;
-
-            return {
-                content: [{
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        current_version: CURRENT_MCP_VERSION,
-                        latest_version: latest,
-                        up_to_date: isUpToDate,
-                        status: isUpToDate ? "✅ You are on the latest version." : `⚠️ Update available: ${CURRENT_MCP_VERSION} → ${latest}`,
-                        release_notes: isUpToDate ? null : data.release_notes,
-                        how_to_update: isUpToDate ? null : data.update_instructions,
-                    }, null, 2),
-                }],
-            };
-        } catch (err: any) {
-            return {
-                content: [{
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        current_version: CURRENT_MCP_VERSION,
-                        status: "⚠️ Could not reach version server. Check your internet connection.",
-                        error: err.message,
-                        fallback_check: `Visit https://www.clawcard.store to see latest version.`,
-                    }, null, 2),
-                }],
-                isError: true,
-            };
-        }
     }
 );
 
