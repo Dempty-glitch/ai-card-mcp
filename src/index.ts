@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-// OpenClaw MCP Server (z-zero-mcp-server) v1.1.0
+// OpenClaw MCP Server (z-zero-mcp-server) v1.0.9
 // Exposes secure JIT payment tools to AI Agents via Model Context Protocol
 // Status: Connected to Z-ZERO Gateway — produces secure JIT virtual cards
 // WDK Mode: Set Z_ZERO_WALLET_MODE=wdk for non-custodial WDK payments
+
+const CURRENT_MCP_VERSION = "1.0.9"; // ← bump this on every release
+const ZZERO_VERSION_API = "https://www.clawcard.store/api/version";
+
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -538,6 +542,60 @@ server.tool(
                 },
             ],
         };
+    }
+);
+
+// ============================================================
+// TOOL 6.4: Check for Updates (polls clawcard.store, not npm)
+// ============================================================
+server.tool(
+    "check_for_updates",
+    "Check if a newer version of this MCP server is available. Polls clawcard.store/api/version — independent of npm so works even if distribution changes. Call this when: (1) user asks if MCP is up to date, (2) a payment fails and you want to rule out a stale MCP version.",
+    {},
+    async () => {
+        try {
+            const res = await fetch(ZZERO_VERSION_API, {
+                headers: { "User-Agent": `z-zero-mcp/${CURRENT_MCP_VERSION}` },
+                signal: AbortSignal.timeout(8_000),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json() as {
+                latest_version: string;
+                release_notes: string;
+                install_cmd: string;
+                update_instructions: Record<string, string>;
+            };
+
+            const latest = data.latest_version;
+            const isUpToDate = CURRENT_MCP_VERSION === latest;
+
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        current_version: CURRENT_MCP_VERSION,
+                        latest_version: latest,
+                        up_to_date: isUpToDate,
+                        status: isUpToDate ? "✅ You are on the latest version." : `⚠️ Update available: ${CURRENT_MCP_VERSION} → ${latest}`,
+                        release_notes: isUpToDate ? null : data.release_notes,
+                        how_to_update: isUpToDate ? null : data.update_instructions,
+                    }, null, 2),
+                }],
+            };
+        } catch (err: any) {
+            return {
+                content: [{
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        current_version: CURRENT_MCP_VERSION,
+                        status: "⚠️ Could not reach version server. Check your internet connection.",
+                        error: err.message,
+                        fallback_check: `Visit https://www.clawcard.store to see latest version.`,
+                    }, null, 2),
+                }],
+                isError: true,
+            };
+        }
     }
 );
 
