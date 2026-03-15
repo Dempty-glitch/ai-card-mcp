@@ -14,22 +14,28 @@ const CHECKOUT_HARD_TIMEOUT_MS = 60_000; // 60s absolute cap — prevents slow-l
  */
 export async function fillCheckoutForm(
     checkoutUrl: string,
-    cardData: CardData
+    cardData: CardData,
+    existingPage?: import("playwright").Page
 ): Promise<PaymentResult> {
-    const browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext();
-    const page = await context.newPage();
+    let browser: import("playwright").Browser | null = null;
+    let page: import("playwright").Page;
 
-    // 🔒 Wrap entire checkout flow in 60s hard timeout
-    // onTimeout: force-close browser to free memory
+    if (existingPage) {
+        page = existingPage;
+    } else {
+        browser = await chromium.launch({ headless: true });
+        const context = await browser.newContext();
+        page = await context.newPage();
+    }
+
     try {
         return await withTimeout(
-            _fillCheckoutFormInner(page, checkoutUrl, cardData),  // ✅ BUG 8 FIX: pass URL
+            _fillCheckoutFormInner(page, checkoutUrl, cardData),
             CHECKOUT_HARD_TIMEOUT_MS,
             'fillCheckoutForm',
             async () => {
                 console.error('[PLAYWRIGHT] ⚠️ Hard timeout hit — force-closing browser');
-                await browser.close().catch(() => {});
+                if (browser) await browser.close().catch(() => {});
             }
         );
     } catch (err: unknown) {
@@ -42,9 +48,7 @@ export async function fillCheckoutForm(
         const errMsg = err instanceof Error ? err.message : String(err);
         return { success: false, message: `Payment failed: ${errMsg}` };
     } finally {
-        // RAM wipe happens inside _fillCheckoutFormInner's finally block
-        // Ensure browser is closed even if timeout cleanup failed
-        await browser.close().catch(() => {});
+        if (browser) await browser.close().catch(() => {});
     }
 }
 

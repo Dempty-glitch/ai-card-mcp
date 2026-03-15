@@ -229,7 +229,7 @@ server.tool(
 // ============================================================
 server.tool(
     "request_payment_token",
-    "Request a temporary payment token for a specific amount. A secure single-use virtual card is issued via the Z-ZERO network. The token is valid for 30 minutes. Min: $1, Max: $100. Use this token with execute_payment to complete a purchase.",
+    "Request a temporary payment token for a specific amount. A secure single-use virtual card is issued via the Z-ZERO network. The token is valid for 1 hour. Min: $1, Max: $100. Use this token with execute_payment to complete a purchase.",
     {
         card_alias: z
             .string()
@@ -298,7 +298,7 @@ server.tool(
                             expires_at: expiresAt,
                             card_issued: true,
                             instructions:
-                                "Use this token with execute_payment within 30 minutes. IMPORTANT: If the actual checkout price is HIGHER than the token amount, do NOT proceed — call cancel_payment_token first and request a new token with the correct amount.",
+                                "Use this token with execute_payment within 1 hour. IMPORTANT: If the actual checkout price is HIGHER than the token amount, do NOT proceed — call cancel_payment_token first and request a new token with the correct amount.",
                         },
                         null,
                         2
@@ -658,9 +658,6 @@ server.tool(
     }
 );
 
-// ============================================================
-// TOOL 7: Auto Pay Checkout (Phase 2 — Smart Routing)
-// ============================================================
 server.tool(
     "auto_pay_checkout",
     "[Phase 2] Autonomous Smart Routing checkout tool. Provide a checkout URL and this tool will:\n" +
@@ -674,25 +671,23 @@ server.tool(
             .describe("Full URL of the checkout/payment page to analyze and pay."),
         card_alias: z
             .string()
-            .describe("Card alias to charge for JIT Fiat fallback, e.g. 'Card_01'. Required even if Web3 route is used (used for WDK wallet lookup)."),
+            .describe("Card alias to charge for JIT Fiat fallback, e.g. 'Card_01'."),
     },
     async ({ checkout_url, card_alias }) => {
         const ZZERO_API = process.env.Z_ZERO_API_BASE || "https://www.clawcard.store";
         const API_KEY = process.env.Z_ZERO_API_KEY || "";
 
-        // ── C2 FIX: API key guard ────────────────────────────────────────────
         if (!API_KEY) {
             return {
                 content: [{ type: "text" as const, text: JSON.stringify({
                     status: "CONFIG_ERROR",
-                    message: "Z_ZERO_API_KEY is not configured on this MCP server. Cannot proceed.",
+                    message: "Z_ZERO_API_KEY is not configured.",
                 }, null, 2) }],
                 isError: true,
             };
         }
 
-        // ── C1 FIX: SSRF guard — validate checkout_url ───────────────────────
-        // Block non-https and internal/private IP ranges
+        // ── SSRF guard ───────────────────────────────────────────────
         (() => {
             let url: URL;
             try { url = new URL(checkout_url); } catch {
@@ -700,12 +695,9 @@ server.tool(
             }
             const isDev = process.env.NODE_ENV !== "production";
             const hostname = url.hostname;
-            // ✅ BUG 4 FIX: Allow http://localhost in dev for testing local checkout pages
-            if (isDev && (hostname === "localhost" || hostname === "127.0.0.1")) {
-                console.error(`[SMART ROUTE] Dev mode: allowing localhost checkout URL`);
-            } else {
+            if (!(isDev && (hostname === "localhost" || hostname === "127.0.0.1"))) {
                 if (url.protocol !== "https:") {
-                    throw new Error(`checkout_url must use HTTPS. Got: ${url.protocol}`);
+                    throw new Error(`checkout_url must use HTTPS.`);
                 }
                 const privatePatterns = [
                     /^localhost$/i, /^127\./, /^10\./,
@@ -713,203 +705,123 @@ server.tool(
                     /^169\.254\./, /^\[::1\]$/, /^0\.0\.0\.0$/,
                 ];
                 if (privatePatterns.some(p => p.test(hostname))) {
-                    throw new Error(`SSRF blocked: checkout_url points to private/internal host: ${hostname}`);
+                    throw new Error(`SSRF blocked host: ${hostname}`);
                 }
             }
         })();
 
-        // ── STEP A: Try to detect Web3 payment on the page ──────────────────
-        console.error(`[SMART ROUTE] Scanning ${checkout_url} for Web3 payment...`);
-        const web3Result = await detectWeb3Payment(checkout_url);
+        // ── Single Browser Instance for efficiency ──────────────────
+        const browser = await chromium.launch({ headless: true });
+        const context = await browser.newContext();
+        const page = await context.newPage();
 
-        if (web3Result.detected && web3Result.params) {
-            // ── SCENARIO A: Web3 Payment Detected ────────────────────────────
-            const { to, eip681_amount, data } = web3Result.params;
+        try {
+            // STEP 1: Web3 Detection
+            console.error(`[SMART ROUTE] Scanning ${checkout_url} for Web3...`);
+            const web3Result = await detectWeb3Payment(page, checkout_url);
 
-            // If amount is baked into EIP-681 link, use it. Otherwise need user to confirm.
-            if (!eip681_amount && !data) {
+            if (web3Result.detected && web3Result.params) {
+                const { to, eip681_amount, data } = web3Result.params;
+                
+                let amount = eip681_amount ?? 0;
+                if (!amount && data && data.length >= 138) {
+                    const amountHex = data.slice(-64);
+                    amount = Number(BigInt(`0x${amountHex}`)) / 1_000_000;
+                }
+
+                if (!amount || amount <= 0) {
+                    return {
+                        content: [{ type: "text" as const, text: JSON.stringify({
+                            route: "WEB3", status: "AMOUNT_REQUIRED", recipient: to,
+                            message: "Web3 detected but amount is unknown.",
+                        }, null, 2) }],
+                    };
+                }
+
+                const resp = await fetch(`${ZZERO_API}/api/wdk/transfer`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "x-passport-key": API_KEY },
+                    body: JSON.stringify({ to, amount, card_alias }),
+                });
+                const txResult = await resp.json() as any;
+
+                if (!resp.ok || !txResult.success) {
+                    return {
+                        content: [{ type: "text" as const, text: JSON.stringify({
+                            route: "WEB3", status: "FAILED", reason: txResult.message || "Transfer failed",
+                        }, null, 2) }],
+                        isError: true,
+                    };
+                }
+
                 return {
-                    content: [{
-                        type: "text" as const,
-                        text: JSON.stringify({
-                            route: "WEB3",
-                            detected: true,
-                            status: "AMOUNT_REQUIRED",
-                            recipient: to,
-                            message: `Web3 payment gateway detected (${web3Result.method}), recipient: ${to}. Could not determine exact USDT amount automatically. Please confirm the amount with the user, then call this tool again with the amount in the checkout_url or use pay_crypto(to=${to}, amount=<confirmed_amount>).`,
-                        }, null, 2),
-                    }],
+                    content: [{ type: "text" as const, text: JSON.stringify({
+                        route: "WEB3", method: web3Result.method, status: "SUCCESS",
+                        recipient: to, amount_usdt: amount, tx_hash: txResult.txHash,
+                        message: `✅ Web3 payment sent on-chain! ${amount} USDT → ${to}.`,
+                        gas_savings: "~$0.001 (ERC-4337 Paymaster, gasless for user)",
+                    }, null, 2) }],
                 };
             }
 
-            // Call backend WDK transfer API
-            let amount = eip681_amount ?? 0;
+            // STEP 2: Fiat Fallback (Price Extraction)
+            console.error(`[SMART ROUTE] No Web3. Extracting price...`);
+            const totalPrice = await extractTotalPrice(page);
 
-            // Decode ERC-20 transfer amount from calldata if EIP-681 amount not available
-            if (!amount && data && data.length >= 138) {
-                const amountHex = data.slice(-64);
-                const amountRaw = BigInt(`0x${amountHex}`);
-                amount = Number(amountRaw) / 1_000_000;
-            }
-
-            // Guard: if we still can't determine amount, ask user
-            if (!amount || amount <= 0) {
+            if (!totalPrice) {
                 return {
-                    content: [{
-                        type: "text" as const,
-                        text: JSON.stringify({
-                            route: "WEB3",
-                            detected: true,
-                            status: "AMOUNT_REQUIRED",
-                            recipient: to,
-                            message: `Web3 tx detected but could not decode USDT amount from calldata. Please confirm the exact amount with the user and use pay_crypto(to=${to}, amount=<amount>).`,
-                        }, null, 2),
-                    }],
-                };
-            }
-
-            const resp = await fetch(`${ZZERO_API}/api/wdk/transfer`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "x-passport-key": API_KEY,
-                },
-                body: JSON.stringify({ to, amount, card_alias }),
-            });
-
-            const txResult = await resp.json() as { success?: boolean; txHash?: string; error?: string; message?: string };
-
-            if (!resp.ok || !txResult.success) {
-                return {
-                    content: [{
-                        type: "text" as const,
-                        text: JSON.stringify({
-                            route: "WEB3",
-                            status: "FAILED",
-                            reason: txResult.message || txResult.error || "Unknown error from WDK transfer API",
-                        }, null, 2),
-                    }],
+                    content: [{ type: "text" as const, text: JSON.stringify({
+                        route: "FIAT", status: "PRICE_NOT_FOUND",
+                    }, null, 2) }],
                     isError: true,
                 };
             }
 
+            if (totalPrice < 1 || totalPrice > 100) {
+                return {
+                    content: [{ type: "text" as const, text: JSON.stringify({
+                        route: "FIAT", status: "AMOUNT_OUT_OF_RANGE", detected_price: totalPrice,
+                    }, null, 2) }],
+                    isError: true,
+                };
+            }
+
+            // Issue Token
+            const token = await issueTokenRemote(card_alias, totalPrice, checkout_url);
+            if (!token || token.error) throw new Error(token?.message || "Token issue failed");
+
+            // Resolve Card Data
+            const cardData = await resolveTokenRemote(token.token);
+            if (!cardData || cardData.error) throw new Error("Card resolve failed");
+
+            // Fill Form (Reusing the same page!)
+            const fillResult = await fillCheckoutForm(checkout_url, cardData, page);
+            if (fillResult.success) {
+                await burnTokenRemote(token.token);
+            }
+
             return {
-                content: [{
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        route: "WEB3",
-                        method: web3Result.method,
-                        status: "SUCCESS",
-                        recipient: to,
-                        amount_usdt: amount,
-                        tx_hash: txResult.txHash,
-                        message: `✅ Web3 payment sent on-chain! ${amount} USDT → ${to}. Tx: ${txResult.txHash}`,
-                        gas_savings: "~$0.001 (ERC-4337 Paymaster, gasless for user)",
-                    }, null, 2),
-                }],
-            };
-        }
-
-        // ── SCENARIO B: No Web3 — Fiat JIT Card fallback ────────────────────
-        console.error(`[SMART ROUTE] No Web3 detected. Scanning DOM for total price...`);
-
-        // ✅ BUG 1+2 FIX: Use try/finally so browser ALWAYS closes (even on success).
-        // fillCheckoutForm opens its own browser — this avoids triple browser + leak.
-        let totalPrice: number | null = null;
-        const priceBrowser = await chromium.launch({ headless: true });
-        try {
-            const pricePage = await priceBrowser.newPage();
-            await pricePage.goto(checkout_url, { waitUntil: "domcontentloaded", timeout: 20_000 });
-            totalPrice = await extractTotalPrice(pricePage);
-        } catch {
-            // ignore — totalPrice stays null, handled below
-        } finally {
-            await priceBrowser.close().catch(() => {});  // ✅ Always close
-        }
-
-        if (!totalPrice) {
-            return {
-                content: [{
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        route: "FIAT",
-                        status: "PRICE_NOT_FOUND",
-                        message: "Could not automatically detect the total price on this page. Please manually confirm the exact checkout price and use request_payment_token + execute_payment instead.",
-                    }, null, 2),
-                }],
-                isError: true,
-            };
-        }
-
-        if (totalPrice < 1 || totalPrice > 100) {
-            return {
-                content: [{
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        route: "FIAT",
-                        status: "AMOUNT_OUT_OF_RANGE",
-                        detected_price: totalPrice,
-                        message: `Detected price $${totalPrice} is outside the JIT card limit ($1-$100). Please confirm with user and use request_payment_token manually.`,
-                    }, null, 2),
-                }],
-                isError: true,
-            };
-        }
-
-        // Issue JIT card for exactly the detected total
-        console.error(`[SMART ROUTE] Fiat route: issuing JIT card for $${totalPrice}`);
-        const token = await issueTokenRemote(card_alias, totalPrice, checkout_url);
-        if (!token || token.error) {
-            return {
-                content: [{
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        route: "FIAT",
-                        status: "TOKEN_ISSUE_FAILED",
-                        message: token?.message || "Could not issue JIT card. Check balance or card alias.",
-                    }, null, 2),
-                }],
-                isError: true,
-            };
-        }
-
-        // Resolve token and auto-fill form
-        const cardData = await resolveTokenRemote(token.token);
-        if (!cardData || cardData.error) {
-            return {
-                content: [{
-                    type: "text" as const,
-                    text: JSON.stringify({
-                        route: "FIAT",
-                        status: "CARD_RESOLVE_FAILED",
-                        message: "Failed to resolve JIT card data. Token may have expired.",
-                    }, null, 2),
-                }],
-                isError: true,
-            };
-        }
-
-        const fillResult = await fillCheckoutForm(checkout_url, cardData);
-        if (fillResult.success) {
-            await burnTokenRemote(token.token);
-        }
-
-        return {
-            content: [{
-                type: "text" as const,
-                text: JSON.stringify({
-                    route: "FIAT",
-                    status: fillResult.success ? "SUCCESS" : "FILL_FAILED",
+                content: [{ type: "text" as const, text: JSON.stringify({
+                    route: "FIAT", status: fillResult.success ? "SUCCESS" : "FILL_FAILED",
                     detected_price: totalPrice,
-                    jit_card_issued: true,
                     message: fillResult.success
-                        ? `✅ JIT Visa card issued for $${totalPrice} and checkout filled successfully.`
-                        : `❌ JIT card issued but checkout form fill failed: ${fillResult.message}`,
+                        ? `✅ JIT card issued for $${totalPrice} and checkout filled.`
+                        : `❌ Fill failed: ${fillResult.message}`,
                     receipt_id: fillResult.receipt_id || null,
-                }, null, 2),
-            }],
-            isError: !fillResult.success,
-        };
+                }, null, 2) }],
+                isError: !fillResult.success,
+            };
+
+        } catch (err: any) {
+            return {
+                content: [{ type: "text" as const, text: JSON.stringify({
+                    status: "ERROR", message: err.message,
+                }, null, 2) }],
+                isError: true,
+            };
+        } finally {
+            await browser.close().catch(() => {});
+        }
     }
 )
 
@@ -938,7 +850,7 @@ When asked to make a purchase, execute the following steps precisely in order:
 
 ## Step 2: Requesting the JIT Token
 1. Request Token: Call the \`request_payment_token\` tool with the exact \`amount\` required and the \`merchant\` name.
-2. Receive Token: You will receive a temporary \`token\` (e.g., \`temp_auth_1a2b...\`). This token is locked to the requested amount and is valid for 30 minutes.
+2. Receive Token: You will receive a temporary \`token\` (e.g., \`temp_auth_1a2b...\`). This token is locked to the requested amount and is valid for 1 hour.
 
 ## Step 3: Locating the Checkout
 1. Identify Checkout URL: Find the merchant's checkout/payment page where credit card details are normally entered.

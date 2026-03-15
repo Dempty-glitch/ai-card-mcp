@@ -24,21 +24,16 @@ export interface Web3DetectionResult {
 const WEB3_DETECT_TIMEOUT_MS = 12_000; // 12s max to detect Web3 button click
 
 /**
- * Opens the checkout URL in a headless browser.
+ * Checks a page for Web3 payment indicators (EIP-681 or interrupted eth_sendTransaction).
  * Injects a mock window.ethereum (MetaMask emulation).
- * Scans for EIP-681 links.
  * Returns the tx params if Web3 payment is detected, else null.
  */
 export async function detectWeb3Payment(
-    checkoutUrl: string,
+    page: import("playwright").Page,
+    checkoutUrl: string
 ): Promise<Web3DetectionResult> {
-    const browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext();
-    const page = await context.newPage();
-
     try {
         // ─── Inject mock window.ethereum BEFORE page loads ───────────────────
-        // This ensures the page's `if (typeof window.ethereum !== 'undefined')` check passes.
         await page.addInitScript(() => {
             const mockEthereum = {
                 isMetaMask: true,
@@ -59,7 +54,6 @@ export async function detectWeb3Payment(
                     }
                     if (method === "wallet_switchEthereumChain") return null;
                     if (method === "eth_getBalance") return "0x0";
-                    // C3 FIX: Log unrecognized methods for debugging DApp compatibility
                     (window as unknown as Record<string, unknown>)["__wdkUnknownMethod_" + method] = true;
                     return null;
                 },
@@ -86,7 +80,6 @@ export async function detectWeb3Payment(
         await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
 
         // ─── Strategy A: Scan for EIP-681 links ──────────────────────────────
-        // Look for links like: ethereum:0xabc...@137/transfer?address=0xabc&uint256=10000000
         const eip681Result = await page.evaluate(() => {
             const links = Array.from(document.querySelectorAll("a[href]"))
                 .map(a => (a as HTMLAnchorElement).href)
@@ -99,17 +92,14 @@ export async function detectWeb3Payment(
             const href = links[0] ?? inlineMatch?.[0] ?? null;
             if (!href) return null;
 
-            // Parse: ethereum:0xCONTRACT@137/transfer?address=0xRECIPIENT&uint256=10000000
             const contractMatch = href.match(/ethereum:(0x[0-9a-fA-F]{40})/);
             const chainMatch = href.match(/@(\d+)/);
             const uint256Match = href.match(/uint256=(\d+)/);
-            // ✅ BUG 6 FIX: Parse recipient from 'address=' query param (not the contract address)
             const recipientMatch = href.match(/[?&]address=(0x[0-9a-fA-F]{40})/);
 
             return {
-                // Prefer recipient address from query param; fall back to contract only as last resort
                 to: recipientMatch?.[1] ?? contractMatch?.[1] ?? null,
-                contract: contractMatch?.[1] ?? null,   // USDT contract (kept for logging)
+                contract: contractMatch?.[1] ?? null,
                 chainId: chainMatch ? parseInt(chainMatch[1]) : 137,
                 uint256: uint256Match?.[1] ?? null,
                 raw: href,
@@ -118,9 +108,8 @@ export async function detectWeb3Payment(
 
         if (eip681Result?.to) {
             const usdtAmount = eip681Result.uint256
-                ? parseInt(eip681Result.uint256) / 1_000_000  // USDT has 6 decimals
+                ? parseInt(eip681Result.uint256) / 1_000_000
                 : null;
-            console.error(`[WEB3] ✅ EIP-681 detected: recipient=${eip681Result.to}, contract=${eip681Result.contract}, amount=${usdtAmount} USDT`);
             return {
                 detected: true,
                 method: "EIP-681",
@@ -134,56 +123,48 @@ export async function detectWeb3Payment(
         }
 
         // ─── Strategy B: Wait for eth_sendTransaction after clicking "Pay" ────
-        // ✅ BUG 5 FIX: Auto-click common Web3 pay buttons so DApp triggers eth_sendTransaction
         const web3ButtonSelectors = [
             'button:has-text("MetaMask")', 'button:has-text("Pay with Crypto")',
             'button:has-text("Connect Wallet")', 'button:has-text("Pay with Web3")',
             'button:has-text("Pay with Wallet")', '#pay-metamask-btn',
             '[class*="web3"] button', '[class*="metamask"] button',
         ];
+
+        // Click buttons sequentially, small delay to let UI reaction
         for (const sel of web3ButtonSelectors) {
             try {
                 const btn = await page.$(sel);
                 if (btn && await btn.isVisible()) {
                     console.error(`[WEB3] Clicking Web3 pay button: ${sel}`);
                     await btn.click();
-                    break;
+                    await page.waitForTimeout(500); 
                 }
-            } catch { /* selector may not exist — continue */ }
+            } catch { /* skip */ }
         }
 
-        // Poll for captured tx (window.ethereum.request intercepted by mock)
-        const capturedTx = await Promise.race([
-            // Poll for captured tx
-            (async () => {
-                const start = Date.now();
-                while (Date.now() - start < WEB3_DETECT_TIMEOUT_MS) {
-                    const tx = await page.evaluate(() => {
-                        return (window as unknown as Record<string, unknown>)["__wdkCapturedTx"] ?? null;
-                    });
-                    if (tx) return tx as Record<string, string>;
-                    await page.waitForTimeout(500);
-                }
-                return null;
-            })(),
-        ]);
-
-        if (capturedTx) {
-            console.error(`[WEB3] ✅ eth_sendTransaction captured: to=${capturedTx["to"]}`);
-            return {
-                detected: true,
-                method: "eth_sendTransaction",
-                params: {
-                    to: capturedTx["to"] as string,
-                    value: capturedTx["value"] as string | undefined,
-                    data: capturedTx["data"] as string | undefined,
-                    chainId: 137,
-                },
-                message: `Web3 payment detected via eth_sendTransaction. Recipient: ${capturedTx["to"]}`,
-            };
+        // Poll for captured tx
+        const start = Date.now();
+        while (Date.now() - start < WEB3_DETECT_TIMEOUT_MS) {
+            const tx = await page.evaluate(() => {
+                return (window as unknown as Record<string, unknown>)["__wdkCapturedTx"] ?? null;
+            });
+            if (tx) {
+                const capturedTx = tx as Record<string, string>;
+                return {
+                    detected: true,
+                    method: "eth_sendTransaction",
+                    params: {
+                        to: capturedTx["to"] as string,
+                        value: capturedTx["value"] as string | undefined,
+                        data: capturedTx["data"] as string | undefined,
+                        chainId: 137,
+                    },
+                    message: `Web3 payment detected via eth_sendTransaction. Recipient: ${capturedTx["to"]}`,
+                };
+            }
+            await page.waitForTimeout(500);
         }
 
-        console.error("[WEB3] ❌ No Web3 payment detected on this page. Fallback to Fiat.");
         return {
             detected: false,
             method: null,
@@ -192,14 +173,11 @@ export async function detectWeb3Payment(
         };
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[WEB3] Error during detection: ${msg}`);
         return {
             detected: false,
             method: null,
             params: null,
             message: `Detection failed: ${msg}. Defaulting to Fiat route.`,
         };
-    } finally {
-        await browser.close().catch(() => {});
     }
 }
