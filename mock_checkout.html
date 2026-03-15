@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fake Checkout</title>
+</head>
+<body>
+    <h1>Checkout Page</h1>
+    <p>Total: $8.99</p>
+    <form>
+        <input type="text" name="cc-number" placeholder="Card Number">
+        <input type="text" name="cc-exp" placeholder="MM/YY">
+        <input type="text" name="cc-cvc" placeholder="CVC">
+        <button type="submit">Pay Now</button>
+    </form>
+    <script>
+        // Track if script runs twice (which would happen if page reloads)
+        if (window.alreadyLoaded) {
+            document.body.innerHTML += "<p id='reload-error'>ERROR: PAGE RELOADED!</p>";
+        } else {
+            window.alreadyLoaded = true;
+        }
+    </script>
+</body>
+</html>

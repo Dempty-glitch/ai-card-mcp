@@ -42,3 +42,16 @@ export interface PaymentResult {
     receipt_id?: string;
     amount?: number;
 }
+
+export interface CheckoutHints {
+    pre_steps?: string[];          // CSS selectors to click BEFORE filling (e.g. open payment accordion)
+    card_selector?: string;        // CSS for card number input
+    exp_selector?: string;         // CSS for expiry combined (MM/YY)
+    exp_month_selector?: string;   // CSS for expiry month (if split)
+    exp_year_selector?: string;    // CSS for expiry year (if split)
+    cvv_selector?: string;         // CSS for CVV/CVC field
+    name_selector?: string;        // CSS for cardholder name
+    submit_selector?: string;      // CSS for submit/pay button
+    notes?: string;                // Human-readable notes (logged, not used by PW)
+}
+

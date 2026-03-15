@@ -30,6 +30,7 @@ console.error(`[Z-ZERO MCP] 🚀 Pure WDK Non-Custodial Mode`);
 
 
 import { fillCheckoutForm } from "./playwright_bridge.js";
+import type { CheckoutHints } from "./types.js";
 import { detectWeb3Payment } from "./lib/web3-detector.js";
 import { extractTotalPrice } from "./lib/extract-total-price.js";
 import { chromium } from "playwright";
@@ -283,7 +284,46 @@ server.tool(
 );
 
 // ============================================================
-// TOOL 4: Execute payment (The "Invisible Hand")
+// TOOL 4a: Get Merchant Hints (Agent Knowledge Base)
+// Agent MUST call this before execute_payment if unsure about a checkout page.
+// Returns domain-specific selectors and pre-steps from Z-ZERO cloud DB.
+// ============================================================
+server.tool(
+    "get_merchant_hints",
+    "Fetch checkout hints for a specific domain from the Z-ZERO Knowledge Base. Call this BEFORE execute_payment when the checkout page is unusual, multi-step, or if a previous execute_payment attempt failed. Returns pre_steps (what to click first) and CSS selectors for card fields.",
+    {
+        domain: z
+            .string()
+            .describe("The main domain of the checkout page, e.g. 'amazon.com' or 'shopify.com'. Strip 'www.' prefix."),
+    },
+    async ({ domain }) => {
+        const ZZERO_API = process.env.Z_ZERO_API_BASE || "https://www.clawcard.store";
+        const INTERNAL_SECRET = process.env.Z_ZERO_INTERNAL_SECRET || "";
+        try {
+            const resp = await fetch(`${ZZERO_API}/api/checkout-hints?domain=${encodeURIComponent(domain)}`, {
+                headers: {
+                    "x-internal-secret": INTERNAL_SECRET,
+                    "x-mcp-version": CURRENT_MCP_VERSION,
+                },
+            });
+            const data = await resp.json();
+            return {
+                content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+            };
+        } catch (err: any) {
+            return {
+                content: [{ type: "text" as const, text: JSON.stringify({
+                    found: false,
+                    hints: null,
+                    message: `Could not reach hints API: ${err?.message || "unknown error"}. Proceed with default Playwright selectors.`,
+                }, null, 2) }],
+            };
+        }
+    }
+);
+
+// ============================================================
+// TOOL 4b: Execute payment (The "Invisible Hand")
 // ============================================================
 server.tool(
     "execute_payment",
@@ -300,8 +340,21 @@ server.tool(
             .number()
             .optional()
             .describe("The actual final amount on the checkout page. If different from token amount, system will auto-refund the difference."),
+        hints: z
+            .object({
+                pre_steps: z.array(z.string()).optional(),
+                card_selector: z.string().optional(),
+                exp_selector: z.string().optional(),
+                exp_month_selector: z.string().optional(),
+                exp_year_selector: z.string().optional(),
+                cvv_selector: z.string().optional(),
+                name_selector: z.string().optional(),
+                submit_selector: z.string().optional(),
+            })
+            .optional()
+            .describe("Optional hints from get_merchant_hints — selectors and pre-steps to guide Playwright. Use when default selectors fail or for complex multi-step checkouts."),
     },
-    async ({ token, checkout_url, actual_amount }) => {
+    async ({ token, checkout_url, actual_amount, hints }) => {
         // Step 1: Resolve token → card data (RAM only)
         const cardData = await resolveTokenRemote(token);
         if (cardData?.error === "AUTH_REQUIRED") {
@@ -353,8 +406,8 @@ server.tool(
             }
         }
 
-        // Step 2: Use Playwright to inject card into checkout form
-        const result = await fillCheckoutForm(checkout_url, cardData);
+        // Step 2: Use Playwright to inject card into checkout form (with optional agent hints)
+        const result = await fillCheckoutForm(checkout_url, cardData, undefined, hints as CheckoutHints | undefined);
 
         // Step 3: Burn the token ONLY if payment succeeded
         // If merchant declines → keep token ACTIVE so webhook decline flow can refund correctly

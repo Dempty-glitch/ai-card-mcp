@@ -2,7 +2,7 @@
 // Securely injects card data into checkout forms without exposing it to AI
 
 import { chromium } from "playwright";
-import type { CardData, PaymentResult } from "./types.js";
+import type { CardData, PaymentResult, CheckoutHints } from "./types.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 
 const CHECKOUT_HARD_TIMEOUT_MS = 60_000; // 60s absolute cap — prevents slow-loris attacks
@@ -15,7 +15,8 @@ const CHECKOUT_HARD_TIMEOUT_MS = 60_000; // 60s absolute cap — prevents slow-l
 export async function fillCheckoutForm(
     checkoutUrl: string,
     cardData: CardData,
-    existingPage?: import("playwright").Page
+    existingPage?: import("playwright").Page,
+    hints?: CheckoutHints
 ): Promise<PaymentResult> {
     let browser: import("playwright").Browser | null = null;
     let page: import("playwright").Page;
@@ -30,7 +31,7 @@ export async function fillCheckoutForm(
 
     try {
         return await withTimeout(
-            _fillCheckoutFormInner(page, checkoutUrl, cardData),
+            _fillCheckoutFormInner(page, checkoutUrl, cardData, hints),
             CHECKOUT_HARD_TIMEOUT_MS,
             'fillCheckoutForm',
             async () => {
@@ -99,7 +100,8 @@ async function tryFillField(
 async function _fillCheckoutFormInner(
     page: import("playwright").Page,
     checkoutUrl: string,
-    cardData: CardData
+    cardData: CardData,
+    hints?: CheckoutHints
 ): Promise<PaymentResult> {
     try {
         // ✅ FIX: Skip navigation if page already loaded (Single Browser reuse from auto_pay_checkout)
@@ -108,6 +110,86 @@ async function _fillCheckoutFormInner(
         const baseCheckoutUrl = checkoutUrl.split("?")[0];
         if (!currentUrl || currentUrl === "about:blank" || !currentUrl.startsWith(baseCheckoutUrl)) {
             await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
+        }
+
+        // ============================================================
+        // STRATEGY 0: Pre-steps — click to open/reveal the payment form
+        // Agent provides selectors to click BEFORE filling (e.g. accordion, tab, modal)
+        // ============================================================
+        if (hints?.pre_steps && hints.pre_steps.length > 0) {
+            for (const selector of hints.pre_steps) {
+                try {
+                    const el = await page.$(selector);
+                    if (el && await el.isVisible()) {
+                        await el.click();
+                        await page.waitForTimeout(500); // brief pause for animation
+                    }
+                } catch { /* non-fatal — continue */ }
+            }
+        }
+
+        let filledFields = 0;
+
+        // ============================================================
+        // STRATEGY 0.5: Agent-provided selectors (from get_merchant_hints)
+        // Tried first — agent already read the DOM and knows exact locations.
+        // Falls through to Strategy 1 if agent selectors don't match anything.
+        // ============================================================
+        if (hints && (hints.card_selector || hints.exp_selector || hints.cvv_selector)) {
+            const hintFillResults: boolean[] = [];
+
+            // Card number
+            if (hints.card_selector) {
+                const el = await page.$(hints.card_selector);
+                if (el) { hintFillResults.push(await smartFill(el, cardData.number)); }
+            }
+
+            // Expiry combined
+            if (hints.exp_selector) {
+                const el = await page.$(hints.exp_selector);
+                if (el) { hintFillResults.push(await smartFill(el, `${cardData.exp_month}/${cardData.exp_year.slice(-2)}`)); }
+            }
+
+            // Expiry split month/year
+            if (!hints.exp_selector && hints.exp_month_selector) {
+                const elM = await page.$(hints.exp_month_selector);
+                if (elM) hintFillResults.push(await smartFill(elM, cardData.exp_month));
+                if (hints.exp_year_selector) {
+                    const elY = await page.$(hints.exp_year_selector);
+                    if (elY) hintFillResults.push(await smartFill(elY, cardData.exp_year));
+                }
+            }
+
+            // CVV
+            if (hints.cvv_selector) {
+                const el = await page.$(hints.cvv_selector);
+                if (el) { hintFillResults.push(await smartFill(el, cardData.cvv)); }
+            }
+
+            // Name
+            if (hints.name_selector) {
+                const el = await page.$(hints.name_selector);
+                if (el) { hintFillResults.push(await smartFill(el, cardData.name)); }
+            }
+
+            const hintSuccesses = hintFillResults.filter(Boolean).length;
+            if (hintSuccesses > 0) {
+                filledFields += hintSuccesses;
+                // Use custom submit if provided, then skip to submit section
+                if (hints.submit_selector) {
+                    try {
+                        const btn = await page.$(hints.submit_selector);
+                        if (btn && await btn.isVisible()) { await btn.click(); await page.waitForTimeout(3000); }
+                    } catch { /* non-fatal */ }
+                }
+                const receiptId = `rcpt_${Date.now().toString(36)}`;
+                return {
+                    success: true,
+                    message: `Payment form filled via agent hints. ${filledFields} fields injected.`,
+                    receipt_id: receiptId,
+                };
+            }
+            // hints provided but nothing matched → fall through to Strategy 1
         }
 
         // ============================================================
@@ -183,8 +265,6 @@ async function _fillCheckoutFormInner(
                 'input[aria-label*="name on card" i]',
             ],
         };
-
-        let filledFields = 0;
 
         // Card Number
         if (await tryFillField(page, S.number, cardData.number)) filledFields++;
