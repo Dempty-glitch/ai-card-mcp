@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// OpenClaw MCP Server (z-zero-mcp-server) v1.0.9
+// OpenClaw MCP Server (z-zero-mcp-server) v1.1.0
 // Exposes secure JIT payment tools to AI Agents via Model Context Protocol
 // Status: Connected to Z-ZERO Gateway — produces secure JIT virtual cards
 // WDK Mode: Set Z_ZERO_WALLET_MODE=wdk for non-custodial WDK payments
 
-const CURRENT_MCP_VERSION = "1.0.9"; // ← bump this on every release
+const CURRENT_MCP_VERSION = "1.1.0"; // ← bump this on every release
 const ZZERO_VERSION_API = "https://www.clawcard.store/api/version";
 
 
