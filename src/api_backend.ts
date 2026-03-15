@@ -3,20 +3,21 @@
 // This preserves the "Issuer Abstraction Layer" - the bot never sees direct DB or Banking keys.
 
 import type { CardData, PaymentToken } from "./types.js";
+import { getPassportKey, hasPassportKey } from "./lib/key-store.js";
 
 const API_BASE_URL = process.env.Z_ZERO_API_BASE_URL || "https://www.clawcard.store";
-const PASSPORT_KEY = process.env.Z_ZERO_API_KEY || "";
 const INTERNAL_SECRET = process.env.Z_ZERO_INTERNAL_SECRET || "";
 
-if (!PASSPORT_KEY) {
+if (!hasPassportKey()) {
     console.error("❌ ERROR: Z_ZERO_API_KEY (Passport Key) is missing!");
-    console.error("🔐 Please get your Passport Key from: https://www.clawcard.store/dashboard/agents");
-    console.error("🛠️ Setup: Ensure 'Z_ZERO_API_KEY' is set in your environment variables.");
+    console.error("🔐 Get your key: https://www.clawcard.store/dashboard/agents");
+    console.error("🛠️  Or call the set_api_key MCP tool to set it without restarting.");
 }
 
 async function apiRequest(endpoint: string, method: string = 'GET', body: any = null) {
+    const PASSPORT_KEY = getPassportKey();  // ✅ Hot-swap: read key dynamically each request
     if (!PASSPORT_KEY) {
-        return { error: "AUTH_REQUIRED", message: "Z_ZERO_API_KEY is missing. Human needs to set it in MCP config." };
+        return { error: "AUTH_REQUIRED", message: "Z_ZERO_API_KEY is missing. Call set_api_key tool or set it in MCP config and restart." };
     }
     const url = `${API_BASE_URL.replace(/\/$/, '')}${endpoint}`;
     try {

@@ -37,6 +37,7 @@ import { fillCheckoutForm } from "./playwright_bridge.js";
 import { detectWeb3Payment } from "./lib/web3-detector.js";
 import { extractTotalPrice } from "./lib/extract-total-price.js";
 import { chromium } from "playwright";
+import { setPassportKey, getPassportKey } from "./lib/key-store.js"; // ✅ Hot-Swap support
 
 // ============================================================
 // CREATE MCP SERVER
@@ -536,6 +537,65 @@ server.tool(
                     text: message,
                 },
             ],
+        };
+    }
+);
+
+// ============================================================
+// TOOL 6.5: Set API Key (Hot-Swap Passport Key — NO restart needed)
+// ============================================================
+server.tool(
+    "set_api_key",
+    "Update the Z-ZERO Passport Key immediately WITHOUT restarting the AI tool. Call this when the human provides a new key (e.g. 'zk_live_xxxxx'). The key is validated and activated instantly for all subsequent API calls. IMPORTANT: Never ask for the key proactively — only call this when the human explicitly provides it.",
+    {
+        api_key: z
+            .string()
+            .describe("The new Passport Key to activate. Must start with 'zk_live_' or 'zk_test_'. Get from: https://www.clawcard.store/dashboard/agents"),
+    },
+    async ({ api_key }) => {
+        const result = setPassportKey(api_key);
+        if (!result.ok) {
+            return {
+                content: [{ type: "text" as const, text: `❌ ${result.message}` }],
+                isError: true,
+            };
+        }
+        return {
+            content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                    status: "SUCCESS",
+                    message: `✅ ${result.message}`,
+                    active_key_prefix: api_key.slice(0, 12) + "...",
+                    note: "All subsequent API calls will use this key. No restart needed.",
+                }, null, 2),
+            }],
+        };
+    }
+);
+
+// ============================================================
+// TOOL 6.6: Show current API Key status (for debugging)
+// ============================================================
+server.tool(
+    "show_api_key_status",
+    "Show whether a Passport Key is currently configured, and its prefix (first 12 chars). Does NOT reveal the full key. Use this to debug authentication issues.",
+    {},
+    async () => {
+        const key = getPassportKey();
+        const hasKey = key.length > 0;
+        return {
+            content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                    configured: hasKey,
+                    key_prefix: hasKey ? key.slice(0, 12) + "..." : null,
+                    wallet_mode: process.env.Z_ZERO_WALLET_MODE || "custodial",
+                    note: hasKey
+                        ? "Key is active. Call set_api_key to update it."
+                        : "No key configured. Call set_api_key with your Passport Key from https://www.clawcard.store/dashboard/agents",
+                }, null, 2),
+            }],
         };
     }
 );
