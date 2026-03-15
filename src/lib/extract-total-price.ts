@@ -100,7 +100,9 @@ export async function extractTotalPrice(page: Page): Promise<number | null> {
                 if (v >= 0.5 && v < 10000) values.push(v);
             }
             if (values.length === 0) return null;
-            return Math.max(...values);
+            // ✅ FIX 10: Use median instead of max — prevents merchant injecting hidden large price
+            values.sort((a, b) => a - b);
+            return values[Math.floor(values.length / 2)];
         });
 
         if (amount !== null && amount > 0) {

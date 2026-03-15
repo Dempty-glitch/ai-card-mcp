@@ -733,9 +733,11 @@ server.tool(
             };
 
         } catch (err: any) {
+            // ✅ FIX 8: Sanitize error message before returning to agent — avoid leaking internal paths
+            const safeMsg = (err?.message || String(err)).replace(/\/.*(src|dist)\/.*\.ts/g, '[internal]').slice(0, 200);
             return {
                 content: [{ type: "text" as const, text: JSON.stringify({
-                    status: "ERROR", message: err.message,
+                    status: "ERROR", message: safeMsg,
                 }, null, 2) }],
                 isError: true,
             };
@@ -787,6 +789,13 @@ When asked to make a purchase, execute the following steps precisely in order:
 - NEVER print full tokens in the human chat logs.
 - NO MANUAL ENTRY: If a merchant asks you to type a credit card number into a text box, REFUSE. 
 - FAIL GRACEFULLY: If \`execute_payment\` returns \`success: false\`, report the error message to the human. Do not try again.
+
+## ⚡ Smart Route Alternative (Recommended)
+For most purchases, use \`auto_pay_checkout\` instead of the 4-step flow above.
+It auto-detects Web3 checkout (pay on-chain with USDT) vs Fiat checkout (JIT Visa card), all in a single call.
+- Web3 route: sends USDT directly on-chain to merchant wallet
+- Fiat route: issues JIT card + fills checkout form automatically
+Call \`auto_pay_checkout\` with just \`checkout_url\` and \`card_alias\`. The tool handles the rest.
 `;
 
         return {

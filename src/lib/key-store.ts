@@ -25,9 +25,9 @@ export function setPassportKey(newKey: string): { ok: boolean; message: string }
     if (!trimmed.startsWith("zk_live_") && !trimmed.startsWith("zk_test_")) {
         return { ok: false, message: `Invalid key format — must start with "zk_live_" or "zk_test_". Got: "${trimmed.slice(0, 12)}..."` };
     }
-    const previous = _passportKey;
     _passportKey = trimmed;
-    console.error(`[KEY-STORE] ✅ Passport Key updated: ${previous.slice(0, 10)}... → ${trimmed.slice(0, 10)}...`);
+    // ✅ FIX 11: Don't log partial key — even 10 chars helps brute-force
+    console.error(`[KEY-STORE] ✅ Passport Key updated successfully.`);
     return { ok: true, message: `Passport Key updated successfully. Active key prefix: ${trimmed.slice(0, 10)}...` };
 }
 

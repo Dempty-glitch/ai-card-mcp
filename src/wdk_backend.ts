@@ -54,8 +54,9 @@ async function apiRequest(endpoint: string, method: string = 'GET', body: any = 
 }
 
 async function internalApiRequest(endpoint: string, method: string, body: any) {
-    if (!INTERNAL_SECRET) {
-        return { error: "CONFIG_ERROR", message: "INTERNAL_SECRET not configured" };
+    // ✅ FIX 9: Validate INTERNAL_SECRET presence and minimum length
+    if (!INTERNAL_SECRET || INTERNAL_SECRET.length < 16) {
+        return { error: "CONFIG_ERROR", message: "INTERNAL_SECRET is missing or too short (min 16 chars)" };
     }
     const url = `${API_BASE_URL.replace(/\/$/, '')}${endpoint}`;
     try {
@@ -195,11 +196,15 @@ export async function resolveTokenRemote(token: string): Promise<CardData | null
     const data = await internalApiRequest('/api/tokens/resolve', 'POST', { token });
     if (!data || data.error) return data;
 
+    // ✅ FIX 7: Reject incomplete card data — don't silently fallback to fake values
+    if (!data.number || !data.cvv || !data.exp) {
+        return { error: "INCOMPLETE_CARD", message: "Card data missing required fields (number/cvv/exp). Token may be invalid or expired." } as CardData;
+    }
     return {
         number: data.number,
-        exp_month: data.exp?.split('/')[0] || "12",
-        exp_year: "20" + (data.exp?.split('/')[1] || "30"),
-        cvv: data.cvv || "123",
+        exp_month: data.exp.split('/')[0],
+        exp_year: "20" + data.exp.split('/')[1],
+        cvv: data.cvv,
         name: data.name || "Z-ZERO AI AGENT",
         authorized_amount: data.authorized_amount ? Number(data.authorized_amount) : undefined,
     };
