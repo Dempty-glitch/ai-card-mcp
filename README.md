@@ -52,6 +52,9 @@ Get your Passport Key at: **[clawcard.store/dashboard/agents](https://www.clawca
 | `execute_payment` | Auto-fill checkout form and execute payment |
 | `cancel_payment_token` | Cancel unused token, refund to wallet |
 | `request_human_approval` | Pause and ask human for approval |
+| `set_api_key` | **(Hot-Swap)** Update the Passport Key *without restarting Claude* |
+| `show_api_key_status` | Check if a Passport Key is currently loaded |
+| `check_for_updates` | **(Maintenance)** Check if a new MCP version is available |
 
 ---
 
