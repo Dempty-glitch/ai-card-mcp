@@ -1,6 +1,6 @@
 {
     "name": "z-zero-mcp-server",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "description": "Z-ZERO MCP Server — Secure JIT Virtual Card Payment tools for AI Agents (Claude, Cursor, AutoGPT) — Real Single-Use Visa Cards",
     "main": "dist/index.js",
     "bin": "dist/index.js",
