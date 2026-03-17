@@ -45,13 +45,15 @@ export interface PaymentResult {
 
 export interface CheckoutHints {
     pre_steps?: string[];          // CSS selectors to click BEFORE filling (e.g. open payment accordion)
-    card_selector?: string;        // CSS for card number input
+    iframe_selector?: string;      // iframe name fragment if card fields are inside an iframe (e.g. "card-fields-iframe" for Shopify)
+    card_selector?: string;        // CSS for card number input (inside iframe if iframe_selector set)
     exp_selector?: string;         // CSS for expiry combined (MM/YY)
     exp_month_selector?: string;   // CSS for expiry month (if split)
     exp_year_selector?: string;    // CSS for expiry year (if split)
     cvv_selector?: string;         // CSS for CVV/CVC field
-    name_selector?: string;        // CSS for cardholder name
+    name_selector?: string;        // CSS for cardholder name (always main page, outside iframe)
     submit_selector?: string;      // CSS for submit/pay button
+    payment_type?: string;         // 'fiat' | 'web3_manual' | 'web3_wallet' | 'auto'
     notes?: string;                // Human-readable notes (logged, not used by PW)
 }
 

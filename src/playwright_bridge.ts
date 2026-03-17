@@ -133,40 +133,66 @@ async function _fillCheckoutFormInner(
         // ============================================================
         // STRATEGY 0.5: Agent-provided selectors (from get_merchant_hints)
         // Tried first — agent already read the DOM and knows exact locations.
-        // Falls through to Strategy 1 if agent selectors don't match anything.
+        // Supports iframe_selector: if provided, card fields are searched INSIDE
+        // matching iframes (e.g. Shopify "card-fields-iframe") rather than main page.
+        // Name on card is always searched on the main page (outside iframe).
+        // Falls through to Strategy 1 if nothing matched.
         // ============================================================
         if (hints && (hints.card_selector || hints.exp_selector || hints.cvv_selector)) {
             const hintFillResults: boolean[] = [];
 
-            // Card number
-            if (hints.card_selector) {
-                const el = await page.$(hints.card_selector);
-                if (el) { hintFillResults.push(await smartFill(el, cardData.number)); }
+            // Determine search context: matching iframe frames or main page.
+            // When iframe_selector is set, Playwright finds frames whose name includes
+            // that fragment. Shopify uses separate iframes per field so we collect ALL.
+            type SearchCtx = import('playwright').Frame | import('playwright').Page;
+            let cardContexts: SearchCtx[] = [page];
+            if (hints.iframe_selector) {
+                const matchingFrames = page.frames().filter((f) =>
+                    f.name().includes(hints.iframe_selector as string)
+                );
+                if (matchingFrames.length > 0) cardContexts = matchingFrames;
             }
 
-            // Expiry combined
+            // Card number
+            if (hints.card_selector) {
+                for (const ctx of cardContexts) {
+                    const el = await ctx.$(hints.card_selector);
+                    if (el) { hintFillResults.push(await smartFill(el, cardData.number)); break; }
+                }
+            }
+
+            // Expiry combined (with space-padded slash for Shopify: "MM / YY")
             if (hints.exp_selector) {
-                const el = await page.$(hints.exp_selector);
-                if (el) { hintFillResults.push(await smartFill(el, `${cardData.exp_month}/${cardData.exp_year.slice(-2)}`)); }
+                const expiryVal = `${cardData.exp_month} / ${cardData.exp_year.slice(-2)}`;
+                for (const ctx of cardContexts) {
+                    const el = await ctx.$(hints.exp_selector);
+                    if (el) { hintFillResults.push(await smartFill(el, expiryVal)); break; }
+                }
             }
 
             // Expiry split month/year
             if (!hints.exp_selector && hints.exp_month_selector) {
-                const elM = await page.$(hints.exp_month_selector);
-                if (elM) hintFillResults.push(await smartFill(elM, cardData.exp_month));
+                for (const ctx of cardContexts) {
+                    const elM = await ctx.$(hints.exp_month_selector);
+                    if (elM) { hintFillResults.push(await smartFill(elM, cardData.exp_month)); break; }
+                }
                 if (hints.exp_year_selector) {
-                    const elY = await page.$(hints.exp_year_selector);
-                    if (elY) hintFillResults.push(await smartFill(elY, cardData.exp_year));
+                    for (const ctx of cardContexts) {
+                        const elY = await ctx.$(hints.exp_year_selector);
+                        if (elY) { hintFillResults.push(await smartFill(elY, cardData.exp_year)); break; }
+                    }
                 }
             }
 
             // CVV
             if (hints.cvv_selector) {
-                const el = await page.$(hints.cvv_selector);
-                if (el) { hintFillResults.push(await smartFill(el, cardData.cvv)); }
+                for (const ctx of cardContexts) {
+                    const el = await ctx.$(hints.cvv_selector);
+                    if (el) { hintFillResults.push(await smartFill(el, cardData.cvv)); break; }
+                }
             }
 
-            // Name
+            // Name on card — ALWAYS on main page (outside iframe for Shopify/most platforms)
             if (hints.name_selector) {
                 const el = await page.$(hints.name_selector);
                 if (el) { hintFillResults.push(await smartFill(el, cardData.name)); }
@@ -175,7 +201,6 @@ async function _fillCheckoutFormInner(
             const hintSuccesses = hintFillResults.filter(Boolean).length;
             if (hintSuccesses > 0) {
                 filledFields += hintSuccesses;
-                // Use custom submit if provided, then skip to submit section
                 if (hints.submit_selector) {
                     try {
                         const btn = await page.$(hints.submit_selector);
@@ -185,7 +210,7 @@ async function _fillCheckoutFormInner(
                 const receiptId = `rcpt_${Date.now().toString(36)}`;
                 return {
                     success: true,
-                    message: `Payment form filled via agent hints. ${filledFields} fields injected.`,
+                    message: `Payment form filled via agent hints${hints.iframe_selector ? ' (iframe mode)' : ''}. ${filledFields} fields injected.`,
                     receipt_id: receiptId,
                 };
             }

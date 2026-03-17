@@ -635,7 +635,11 @@ server.tool(
     "[Phase 2] Autonomous Smart Routing checkout tool. Provide a checkout URL and this tool will:\n" +
     "1. Scan the page to detect if it supports Web3 (Crypto) payments via window.ethereum or EIP-681 links.\n" +
     "2. SCENARIO A (Web3): If detected, automatically send USDT on-chain via WDK (gas ~$0.001). No Visa card needed.\n" +
-    "3. SCENARIO B (Fiat): If no Web3 detected, scan DOM for total price, issue a JIT Visa card for exact amount, auto-fill form.",
+    "3. SCENARIO B (Fiat): If no Web3 detected, scan DOM for total price, issue a JIT Visa card for exact amount, auto-fill form.\n" +
+    "WARNING: For PHYSICAL GOODS (Shopify, multi-step checkout), this tool may return PRICE_NOT_FOUND because the final price " +
+    "(including shipping) only appears after filling th shipping info. In that case, use browser tools to navigate manually, " +
+    "call get_merchant_hints to get platform-specific card selectors, fill shipping info first, then call " +
+    "request_payment_token + execute_payment once card fields are visible and the final total is confirmed.",
     {
         checkout_url: z
             .string()
@@ -849,6 +853,38 @@ It auto-detects Web3 checkout (pay on-chain with USDT) vs Fiat checkout (JIT Vis
 - Web3 route: sends USDT directly on-chain to merchant wallet
 - Fiat route: issues JIT card + fills checkout form automatically
 Call \`auto_pay_checkout\` with just \`checkout_url\` and \`card_alias\`. The tool handles the rest.
+
+## 🛒 Physical Goods / Multi-Step Checkout
+
+For physical goods (clothing, shoes, collectibles, etc.) the final price includes shipping
+and only appears AFTER filling the shipping form. \`auto_pay_checkout\` may return PRICE_NOT_FOUND.
+
+### ⛔ Card Issuance Gate — wait for BOTH conditions before calling request_payment_token:
+1. Shipping/personal info has been submitted successfully on this or a previous page
+2. Card input fields (or payment iframe) are visible on the current page
+
+If EITHER is false → DO NOT call \`request_payment_token\`. Keep navigating first.
+
+### Platform Detection Signals
+| Platform | Signals |
+|----------|---------|
+| Shopify | URL contains /checkouts/, "Powered by Shopify" in footer, cdn.shopify.com scripts |
+| Etsy | URL contains etsy.com/checkout |
+| WooCommerce | /checkout/ URL, woocommerce in body class |
+
+### Recommended Flow for Physical Goods:
+1. Navigate to product page using browser tools
+2. Select variant (color, size, etc.) → Add to cart → Proceed to checkout
+3. Fill shipping info (ask human via \`request_human_approval\` if not already known)
+4. Wait for payment/card fields section to appear
+5. Call \`get_merchant_hints\` with checkout domain (or \`_platform_shopify\` if Shopify detected)
+6. Read the FINAL total (after shipping + tax — hover over/scroll to order summary)
+7. Call \`request_payment_token\` with exact final amount
+8. Call \`execute_payment\` with token + checkout URL + hints
+
+### Known Limitations:
+- Some sites use Cloudflare bot detection (e.g. TeePublic) → \`execute_payment\` may be blocked → inform user
+- Card fields in iframes → \`execute_payment\` handles this automatically via \`iframe_selector\` in hints
 `;
 
         return {
