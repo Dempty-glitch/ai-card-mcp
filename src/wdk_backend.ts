@@ -156,7 +156,7 @@ export async function issueTokenRemote(
     merchant: string
 ): Promise<any | null> {
     // WDK Flow (reversed from custodial):
-    // 1. Create Airwallex card first (reservation)
+    // 1. Create Partner card first (reservation)
     // 2. Send USDT on-chain from WDK wallet → system wallet
     // 3. Dashboard verifies on-chain tx, activates token
     // This is safe: if on-chain tx fails, Dashboard auto-cancels the card reservation.

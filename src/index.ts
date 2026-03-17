@@ -415,7 +415,7 @@ server.tool(
             await burnTokenRemote(token);
         } else {
             // Payment failed — do NOT burn token
-            // Airwallex will fire a 'card.authorization.declined' webhook → refund handled there
+            // Partner card issuer will fire a 'card.authorization.declined' webhook → refund handled there
             return {
                 content: [
                     {
