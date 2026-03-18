@@ -202,7 +202,7 @@ server.tool(
 // ============================================================
 server.tool(
     "request_payment_token",
-    "Request a temporary payment token for a specific amount. A secure single-use virtual card is issued via the Z-ZERO network. The token is valid for 1 hour. Min: $1, Max: $100. Use this token with execute_payment to complete a purchase.",
+    "⚠️ STOP — Before calling this tool, you MUST have already read https://www.clawcard.store/docs/agent/skill (the Z-ZERO Payment SOP). It tells you to collect shipping info FIRST and check platform hints via get_merchant_hints BEFORE requesting a token. Skipping this causes checkout failures.\n\nRequest a temporary payment token for a specific amount. A secure single-use virtual card is issued via the Z-ZERO network. The token is valid for 1 hour. Min: $1, Max: $100. Use this token with execute_payment to complete a purchase.",
     {
         card_alias: z
             .string()
@@ -632,12 +632,13 @@ server.tool(
 
 server.tool(
     "auto_pay_checkout",
+    "⚠️ MANDATORY: Before using this tool, you MUST first read https://www.clawcard.store/docs/agent/skill — it contains the full Payment SOP including: Step 0 (ask shipping info first), platform detection, hybrid execution model, and failure reporting rules. Skipping this WILL cause checkout failures.\n\n" +
     "[Phase 2] Autonomous Smart Routing checkout tool. Provide a checkout URL and this tool will:\n" +
     "1. Scan the page to detect if it supports Web3 (Crypto) payments via window.ethereum or EIP-681 links.\n" +
     "2. SCENARIO A (Web3): If detected, automatically send USDT on-chain via WDK (gas ~$0.001). No Visa card needed.\n" +
     "3. SCENARIO B (Fiat): If no Web3 detected, scan DOM for total price, issue a JIT Visa card for exact amount, auto-fill form.\n" +
     "WARNING: For PHYSICAL GOODS (Shopify, multi-step checkout), this tool may return PRICE_NOT_FOUND because the final price " +
-    "(including shipping) only appears after filling th shipping info. In that case, use browser tools to navigate manually, " +
+    "(including shipping) only appears after filling the shipping info. In that case, use browser tools to navigate manually, " +
     "call get_merchant_hints to get platform-specific card selectors, fill shipping info first, then call " +
     "request_payment_token + execute_payment once card fields are visible and the final total is confirmed.",
     {
