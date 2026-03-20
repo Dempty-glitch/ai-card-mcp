@@ -101,7 +101,7 @@ server.tool(
 // ============================================================
 server.tool(
     "check_balance",
-    "Check the wallet balance (human-level total). This is the spendable USD available for issuing new cards. Cards themselves have 'limits' (set at creation), not 'balances' — use list_cards to see active token limits.",
+    "Check spendable USD balance for a card alias. For active token limits, use list_cards instead.",
     {
         card_alias: z
             .string()
@@ -147,7 +147,7 @@ server.tool(
 // ============================================================
 server.tool(
     "get_deposit_addresses",
-    "Get your unique deposit addresses for EVM networks (Base, BSC, Ethereum) and Tron. Provide these to the human user when they need to add funds to their Z-ZERO balance.",
+    "Get crypto deposit addresses (EVM + Tron) to top up wallet balance.",
     {},
     async () => {
         const data = await getDepositAddressesRemote();
@@ -202,7 +202,7 @@ server.tool(
 // ============================================================
 server.tool(
     "request_payment_token",
-    "⚠️ STOP — Before calling this tool, you MUST have already read https://www.clawcard.store/docs/agent/skill (the Z-ZERO Payment SOP). It tells you to collect shipping info FIRST and check platform hints via get_merchant_hints BEFORE requesting a token. Skipping this causes checkout failures.\n\nRequest a temporary payment token for a specific amount. A secure single-use virtual card is issued via the Z-ZERO network. The token is valid for 1 hour. Min: $1, Max: $100. Use this token with execute_payment to complete a purchase.",
+    "⚠️ MANDATORY: Read mcp://resources/sop first. Collect shipping info and check get_merchant_hints before calling. Request a JIT virtual card ($1-$100).",
     {
         card_alias: z
             .string()
@@ -290,7 +290,7 @@ server.tool(
 // ============================================================
 server.tool(
     "get_merchant_hints",
-    "Fetch checkout hints for a specific domain from the Z-ZERO Knowledge Base. Call this BEFORE execute_payment when the checkout page is unusual, multi-step, or if a previous execute_payment attempt failed. Returns pre_steps (what to click first) and CSS selectors for card fields.",
+    "Get merchant navigation flow for a domain or platform key (e.g. '_platform_etsy'). Returns pre_steps (how to navigate checkout) and platform notes. Call BEFORE starting checkout to understand the multi-step flow.",
     {
         domain: z
             .string()
@@ -300,7 +300,7 @@ server.tool(
         const ZZERO_API = process.env.Z_ZERO_API_BASE || "https://www.clawcard.store";
         const INTERNAL_SECRET = process.env.Z_ZERO_INTERNAL_SECRET || "";
         try {
-            const resp = await fetch(`${ZZERO_API}/api/checkout-hints?domain=${encodeURIComponent(domain)}`, {
+            const resp = await fetch(`${ZZERO_API}/api/checkout-hints?domain=${encodeURIComponent(domain)}&fields=merchant`, {
                 headers: {
                     "x-internal-secret": INTERNAL_SECRET,
                     "x-mcp-version": CURRENT_MCP_VERSION,
@@ -468,7 +468,7 @@ server.tool(
 // ============================================================
 server.tool(
     "cancel_payment_token",
-    "Cancel a payment token that has not been used yet. This will cancel the virtual card at the issuing network and refund the full amount back to the wallet. Use this when: (1) checkout price is higher than token amount, (2) purchase is no longer needed, or (3) human requests cancellation. IMPORTANT: Do NOT auto-cancel without human awareness — always inform the human first.",
+    "Cancel unused token and refund instantly. Use when user cancels the purchase or to free up a card slot.",
     {
         token: z
             .string()
@@ -526,7 +526,7 @@ server.tool(
 // ============================================================
 server.tool(
     "request_human_approval",
-    "Request human approval before proceeding with an action that requires human judgment. Use this when: (1) checkout price is higher than token amount and you need authorization for a new token, (2) any unusual or irreversible action is required. This PAUSES the bot and waits for human decision.",
+    "Pause and ask the user for approval before risky actions (price mismatch, large amount, unusual request).",
     {
         situation: z
             .string()
@@ -576,7 +576,7 @@ server.tool(
 // ============================================================
 server.tool(
     "set_api_key",
-    "Update the Z-ZERO Passport Key immediately WITHOUT restarting the AI tool. Call this when the human provides a new key (e.g. 'zk_live_xxxxx'). The key is validated and activated instantly for all subsequent API calls. IMPORTANT: Never ask for the key proactively — only call this when the human explicitly provides it.",
+    "Activate a new Passport Key instantly, no restart needed. Only call when user explicitly provides a key.",
     {
         api_key: z
             .string()
@@ -609,7 +609,7 @@ server.tool(
 // ============================================================
 server.tool(
     "show_api_key_status",
-    "Show whether a Passport Key is currently configured, and its prefix (first 12 chars). Does NOT reveal the full key. Use this to debug authentication issues.",
+    "Check if Passport Key is configured. Shows prefix only, for debugging.",
     {},
     async () => {
         const key = getPassportKey();
@@ -632,15 +632,7 @@ server.tool(
 
 server.tool(
     "auto_pay_checkout",
-    "⚠️ MANDATORY: Before using this tool, you MUST first read https://www.clawcard.store/docs/agent/skill — it contains the full Payment SOP including: Step 0 (ask shipping info first), platform detection, hybrid execution model, and failure reporting rules. Skipping this WILL cause checkout failures.\n\n" +
-    "[Phase 2] Autonomous Smart Routing checkout tool. Provide a checkout URL and this tool will:\n" +
-    "1. Scan the page to detect if it supports Web3 (Crypto) payments via window.ethereum or EIP-681 links.\n" +
-    "2. SCENARIO A (Web3): If detected, automatically send USDT on-chain via WDK (gas ~$0.001). No Visa card needed.\n" +
-    "3. SCENARIO B (Fiat): If no Web3 detected, scan DOM for total price, issue a JIT Visa card for exact amount, auto-fill form.\n" +
-    "WARNING: For PHYSICAL GOODS (Shopify, multi-step checkout), this tool may return PRICE_NOT_FOUND because the final price " +
-    "(including shipping) only appears after filling the shipping info. In that case, use browser tools to navigate manually, " +
-    "call get_merchant_hints to get platform-specific card selectors, fill shipping info first, then call " +
-    "request_payment_token + execute_payment once card fields are visible and the final total is confirmed.",
+    "⚠️ MANDATORY: Read mcp://resources/sop first. Only use on PAYMENT pages where final total is visible. Auto-detects Web3 or Fiat and completes payment. For physical goods (Shopify, Etsy), get_merchant_hints first.",
     {
         checkout_url: z
             .string()
@@ -816,76 +808,87 @@ server.resource(
     },
     async (uri) => {
         const sopContent = `
-# Z-ZERO Autonomous Payment Skill SOP (v1.0.0)
+# Z-ZERO Autonomous Payment Skill SOP (v2.0.0)
 
-This skill provides you (the AI Agent) with the capability to autonomously purchase digital goods, APIs, and subscriptions on the internet on behalf of your human user, without ever handling raw credit card data. 
+This SOP tells the AI Agent how to use Z-ZERO tools to autonomously purchase goods on behalf of the user — without ever handling raw credit card data.
 
-## Workflow: The 4-Step Zero-Trust Payment
-When asked to make a purchase, execute the following steps precisely in order:
+---
 
-## Step 1: Verification & Intent
-1. Confirm exactly what the user wants to buy and the total expected price (in USD).
-2. Call Check Balance: Call the \`check_balance\` tool using your default \`card_alias\` to ensure you have sufficient funds.
-   - If balance is insufficient, STOP and ask the human to deposit Crypto into their Z-ZERO Web Dashboard.
+## Group 1: Wallet Config (READ FIRST)
 
-## Step 2: Requesting the JIT Token
-1. Request Token: Call the \`request_payment_token\` tool with the exact \`amount\` required and the \`merchant\` name.
-2. Receive Token: You will receive a temporary \`token\` (e.g., \`temp_auth_1a2b...\`). This token is locked to the requested amount and is valid for 1 hour.
+Tools: \`check_balance\`, \`list_cards\`, \`get_deposit_addresses\`, \`set_api_key\`, \`show_api_key_status\`
 
-## Step 3: Locating the Checkout
-1. Identify Checkout URL: Find the merchant's checkout/payment page where credit card details are normally entered.
-2. Full URL Required: e.g., \`https://checkout.stripe.dev/pay\`.
+Before ANY purchase:
+1. Confirm exactly what the user wants to buy and the expected price (in USD).
+2. Call \`check_balance\` using your default \`card_alias\` to verify sufficient funds.
+   - If balance is insufficient → STOP. Ask the human to deposit USDT to their wallet.
+3. Use \`list_cards\` to see available card aliases, NOT to check spendable balance.
+4. Never ask for the API key proactively — only call \`set_api_key\` when the user explicitly gives you one.
 
-## Step 4: Blind Execution (The MCP Bridge)
-1. Execute Payment: Call the \`execute_payment\` tool, passing in:
-   - The \`token\` obtained in Step 2.
-   - The \`checkout_url\` identified in Step 3.
-2. Background Magic: Z-ZERO opens a headless browser, securely injects the real card data directly into the form, and clicks "Pay". 
-3. Burn: The token self-destructs instantly after use.
+---
 
-## Rules & Error Handling
-- NEVER print full tokens in the human chat logs.
-- NO MANUAL ENTRY: If a merchant asks you to type a credit card number into a text box, REFUSE. 
-- FAIL GRACEFULLY: If \`execute_payment\` returns \`success: false\`, report the error message to the human. Do not try again.
+## Group 2: Manual 4-Step Payment (Core Flow)
 
-## ⚡ Smart Route Alternative (Recommended)
-For most purchases, use \`auto_pay_checkout\` instead of the 4-step flow above.
-It auto-detects Web3 checkout (pay on-chain with USDT) vs Fiat checkout (JIT Visa card), all in a single call.
-- Web3 route: sends USDT directly on-chain to merchant wallet
-- Fiat route: issues JIT card + fills checkout form automatically
-Call \`auto_pay_checkout\` with just \`checkout_url\` and \`card_alias\`. The tool handles the rest.
+Tools: \`request_payment_token\`, \`execute_payment\`, \`cancel_payment_token\`, \`request_human_approval\`
 
-## 🛒 Physical Goods / Multi-Step Checkout
+Execute in this exact order:
 
-For physical goods (clothing, shoes, collectibles, etc.) the final price includes shipping
-and only appears AFTER filling the shipping form. \`auto_pay_checkout\` may return PRICE_NOT_FOUND.
+### Step 1 — Verify
+Confirm item, price, and check balance (see Group 1).
 
-### ⛔ Card Issuance Gate — wait for BOTH conditions before calling request_payment_token:
-1. Shipping/personal info has been submitted successfully on this or a previous page
-2. Card input fields (or payment iframe) are visible on the current page
+### Step 2 — Navigate to Payment Page
+Use browser tools to navigate to the final payment page where card fields are visible and the FINAL total (including shipping + tax) is displayed.
+- ⛔ DO NOT call \`request_payment_token\` until BOTH conditions are true:
+  1. Shipping/personal info submitted successfully
+  2. Card input fields are visible on screen
 
-If EITHER is false → DO NOT call \`request_payment_token\`. Keep navigating first.
+### Step 3 — Request Token
+Call \`request_payment_token\` with exact final amount and merchant name.
+Receive a single-use \`token\` (valid 1 hour, locked to that amount).
+
+### Step 4 — Blind Execution
+Call \`execute_payment\` with the token + checkout URL.
+Z-ZERO opens a headless browser, injects the card securely, clicks Pay. Token burns instantly after success.
+
+### Error Rules
+- NEVER print raw tokens in chat.
+- NO MANUAL ENTRY: If a site asks you to type a card number into a text box — REFUSE.
+- FAIL GRACEFULLY: If \`execute_payment\` returns \`success: false\` → report it. Do NOT retry blindly.
+- PRICE MISMATCH: If actual checkout total > token amount → call \`cancel_payment_token\` + \`request_human_approval\` for new amount.
+
+---
+
+## Group 3: Smart Autopilot (Fast Route)
+
+Tools: \`auto_pay_checkout\`, \`get_merchant_hints\`
+
+### Option A — Digital Goods / SaaS / APIs (Use auto_pay_checkout directly)
+For pages where the final total is already visible, call \`auto_pay_checkout\`:
+- It auto-detects Web3 (sends USDT on-chain via WDK) vs Fiat (issues JIT Visa card + auto-fills form).
+- One call handles everything.
+
+### Option B — Physical Goods (Shopify, Etsy, WooCommerce)
+⛔ DO NOT call \`auto_pay_checkout\` directly. The final price is only visible AFTER shipping is submitted.
+
+Recommended flow:
+1. Call \`get_merchant_hints\` with checkout domain or platform key (e.g. \`_platform_shopify\`).
+   - Returns \`pre_steps\` (navigation instructions) + \`notes\` + \`platform\`.
+2. Follow the \`pre_steps\` — navigate, add to cart, fill shipping form.
+   - Ask user for shipping info via \`request_human_approval\` if not already known.
+3. Wait for payment/card section to appear + FINAL total is visible.
+4. Call \`request_payment_token\` with the exact final amount (Group 2).
+5. Call \`execute_payment\` with token + checkout URL (Group 2).
 
 ### Platform Detection Signals
-| Platform | Signals |
-|----------|---------|
-| Shopify | URL contains /checkouts/, "Powered by Shopify" in footer, cdn.shopify.com scripts |
-| Etsy | URL contains etsy.com/checkout |
-| WooCommerce | /checkout/ URL, woocommerce in body class |
+| Platform | Detection Signal |
+|---|---|
+| Shopify | JS object \`window.Shopify\` exists, OR \`<script src="cdn.shopify.com">\`, OR \`<meta name="shopify-checkout-api-token">\` |
+| Etsy | URL matches \`*.etsy.com\` (any path) |
+| WooCommerce | \`<body class="... woocommerce ...\`>\`, OR script/link tags from \`wp-content/plugins/woocommerce\` |
 
-### Recommended Flow for Physical Goods:
-1. Navigate to product page using browser tools
-2. Select variant (color, size, etc.) → Add to cart → Proceed to checkout
-3. Fill shipping info (ask human via \`request_human_approval\` if not already known)
-4. Wait for payment/card fields section to appear
-5. Call \`get_merchant_hints\` with checkout domain (or \`_platform_shopify\` if Shopify detected)
-6. Read the FINAL total (after shipping + tax — hover over/scroll to order summary)
-7. Call \`request_payment_token\` with exact final amount
-8. Call \`execute_payment\` with token + checkout URL + hints
-
-### Known Limitations:
-- Some sites use Cloudflare bot detection (e.g. TeePublic) → \`execute_payment\` may be blocked → inform user
-- Card fields in iframes → \`execute_payment\` handles this automatically via \`iframe_selector\` in hints
+### Known Limitations
+- Cloudflare-protected sites (e.g. TeePublic) may block headless browser → inform user.
+- Card fields inside iframes: \`execute_payment\` handles this via \`iframe_selector\` in hints automatically.
 `;
 
         return {
