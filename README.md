@@ -1,10 +1,47 @@
 # OpenClaw: Z-ZERO AI Agent MCP Server
 
-A Zero-Trust Payment Protocol built specifically for AI Agents using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Give your local agents (Claude, Cursor, AntiGravity) the ability to make real-world purchases — securely, without ever seeing a real card number.
+A Zero-Trust Payment Protocol built for AI Agents using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Give your agents (Claude, Cursor, Antigravity) the ability to make real-world purchases — securely, without ever seeing a real card number.
+
+**What makes it different:**
+- 🔐 **Zero-trust** — AI never sees PAN, CVV, or expiry. Card data exists only in RAM, injected via Playwright, then wiped.
+- 🌐 **Web3 + Fiat** — Auto-detects crypto checkout (EIP-681) and routes to on-chain USDT transfer. Falls back to JIT Visa for fiat.
+- 🧠 **Smart Routing** — Cloud Knowledge Base (`get_merchant_hints`) provides platform-specific checkout playbooks for Shopify, Etsy, WooCommerce, and more.
+- 🔄 **Self-Healing** — Failed checkouts are logged via `report_checkout_fail` for admin review, improving future success rates.
+
+---
 
 ## How It Works
 
-Instead of giving your AI direct access to a credit card number, OpenClaw issues **temporary, single-use JIT tokens**. The token is resolved in RAM, Playwright injects the card data directly into the payment form, and the virtual card is burned milliseconds later. Your AI never sees the PAN, CVV, or expiry.
+```mermaid
+sequenceDiagram
+    actor User
+    participant AI as AI Agent
+    participant MCP as MCP Tools
+    participant API as Z-ZERO API
+    participant DB as Supabase DB
+
+    User->>AI: "Buy me this Shopify item"
+    Note over AI: Scans available MCP Tools
+    AI->>MCP: Reads description of auto_pay_checkout
+    MCP-->>AI: "⚠️ MANDATORY: Read mcp://resources/sop first"
+    Note over AI: Fetches SOP before proceeding
+    AI->>MCP: Fetch resource mcp://resources/sop
+    MCP-->>AI: Platform rules + 3-Group payment SOP
+    Note over AI: "Shopify = physical goods. Must collect shipping first."
+    AI->>MCP: get_merchant_hints("_platform_shopify")
+    MCP->>API: GET /api/checkout-hints?domain=_platform_shopify&fields=merchant
+    API->>DB: Query checkout_hints table
+    DB-->>API: Platform hints data
+    API-->>MCP: Returns pre_steps + notes only
+    MCP-->>AI: "Fill shipping form first, click Next..."
+    Note over AI: Navigates checkout, fills shipping, waits for payment page
+    AI->>MCP: request_payment_token(amount, card_alias)
+    MCP-->>AI: Token: temp_auth_XYZ (1hr TTL)
+    AI->>MCP: execute_payment(token, checkout_url)
+    Note over MCP: Playwright auto-fills card form, burns token after use
+    MCP-->>AI: Success — payment complete
+    AI-->>User: "Done! Your Shopify item has been ordered."
+```
 
 ---
 
@@ -43,18 +80,34 @@ Get your Passport Key at: **[clawcard.store/dashboard/agents](https://www.clawca
 
 ## Available MCP Tools
 
+### Group 1 — Wallet Config (Passive)
+
 | Tool | Description |
 |------|-------------|
-| `list_cards` | View your virtual card aliases and balances |
-| `check_balance` | Query a specific card's real-time balance |
-| `get_deposit_addresses` | Get deposit addresses to top up your balance |
-| `request_payment_token` | Generate a JIT auth token for a specific amount |
-| `execute_payment` | Auto-fill checkout form and execute payment |
-| `cancel_payment_token` | Cancel unused token, refund to wallet |
-| `request_human_approval` | Pause and ask human for approval |
-| `set_api_key` | **(Hot-Swap)** Update the Passport Key *without restarting Claude* |
-| `show_api_key_status` | Check if a Passport Key is currently loaded |
-| `check_for_updates` | **(Maintenance)** Check if a new MCP version is available |
+| `list_cards` | List all virtual card aliases and balances |
+| `check_balance` | Check spendable USD balance for a card alias |
+| `get_deposit_addresses` | Get crypto deposit addresses (EVM + Tron) to top up balance |
+| `set_api_key` | Activate a new Passport Key instantly, no restart needed |
+| `show_api_key_status` | Check if a Passport Key is currently loaded (prefix only) |
+
+### Group 2 — Manual 4-Step Payment (Active)
+
+| Tool | Description |
+|------|-------------|
+| `request_payment_token` | Issue a JIT single-use Visa token for a specific amount (1hr TTL) |
+| `execute_payment` | Auto-fill checkout form using a payment token via Playwright |
+| `cancel_payment_token` | Cancel an unused token and refund to wallet |
+| `request_human_approval` | Pause and request human confirmation before proceeding |
+
+### Group 3 — Smart Autopilot
+
+| Tool | Description |
+|------|-------------|
+| `auto_pay_checkout` | Fully autonomous checkout — auto-detects Web3 or Fiat and completes payment |
+| `get_merchant_hints` | Fetch platform-specific checkout playbook (pre-steps + selectors) from Knowledge Base |
+| `report_checkout_fail` | Log a failed checkout URL for admin review (self-healing feedback loop) |
+
+> 📖 **Note:** Version checking is handled automatically in each API call. No separate tool needed.
 
 ---
 
