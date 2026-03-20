@@ -798,6 +798,55 @@ server.tool(
 )
 
 // ============================================================
+// TOOL: Report a failed checkout URL (Group 3 self-healing feedback)
+// Call when Group 3 navigation was started but could not complete.
+// Triggers: stuck mid pre_steps, bot blocked, selector not found, etc.
+// Does NOT apply to: user cancelled, insufficient balance, price mismatch.
+// ============================================================
+server.tool(
+    "report_checkout_fail",
+    "Report a checkout URL that you could not complete. Call this when you failed to finish a purchase — for any reason (field not found, bot blocked, timeout, unknown form). The URL will be logged for admin review to improve future checkout success rates. This is part of Z-ZERO's self-healing loop.",
+    {
+        url: z
+            .string()
+            .url()
+            .describe("The checkout/payment page URL where the purchase failed."),
+        error_type: z
+            .string()
+            .describe("Short error category: 'field_not_found', 'timeout', 'bot_blocked', 'unknown_form', 'price_mismatch', or 'other'."),
+        error_message: z
+            .string()
+            .optional()
+            .describe("Brief description of what went wrong, e.g. 'Could not find card number field' or 'Page redirected to CAPTCHA'."),
+    },
+    async ({ url, error_type, error_message }) => {
+        const ZZERO_API = process.env.Z_ZERO_API_BASE || "https://www.clawcard.store";
+        const INTERNAL_SECRET = process.env.Z_ZERO_INTERNAL_SECRET || "";
+        try {
+            await fetch(`${ZZERO_API}/api/checkout-hints`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-internal-secret": INTERNAL_SECRET,
+                    "x-mcp-version": CURRENT_MCP_VERSION,
+                },
+                body: JSON.stringify({ url, error_type, error_message, mcp_version: CURRENT_MCP_VERSION }),
+            });
+        } catch {
+            // Fire-and-forget — never block the agent on a logging call
+        }
+        return {
+            content: [{ type: "text" as const, text: JSON.stringify({
+                logged: true,
+                url,
+                error_type,
+                message: "Checkout failure logged. Admin will review and improve hints for this domain.",
+            }, null, 2) }],
+        };
+    }
+);
+
+// ============================================================
 // RESOURCE: Z-ZERO Autonomous Payment SOP
 // ============================================================
 server.resource(
@@ -889,6 +938,12 @@ Recommended flow:
 ### Known Limitations
 - Cloudflare-protected sites (e.g. TeePublic) may block headless browser → inform user.
 - Card fields inside iframes: \`execute_payment\` handles this via \`iframe_selector\` in hints automatically.
+
+### Failure Reporting (Self-Healing Loop)
+If you started Group 3 (called \`get_merchant_hints\` and began following \`pre_steps\`) but CANNOT complete the checkout due to a technical reason:
+→ Call \`report_checkout_fail(url, error_type, error_message)\` before giving up.
+→ Use \`url\` = the page you were on when stuck.
+→ Do NOT call this if user cancelled or balance was insufficient — those are not technical failures.
 `;
 
         return {
@@ -911,7 +966,7 @@ async function main() {
     await server.connect(transport);
     console.error(`🔐 OpenClaw MCP Server v${CURRENT_MCP_VERSION} running (Phase 2: Smart Routing enabled)...`);
     console.error("Status: Secure & Connected to Z-ZERO Gateway");
-    console.error("Tools: list_cards, check_balance, request_payment_token, execute_payment, cancel_payment_token, request_human_approval, auto_pay_checkout");
+    console.error("Tools: list_cards, check_balance, request_payment_token, execute_payment, cancel_payment_token, request_human_approval, auto_pay_checkout, report_checkout_fail");
 }
 
 main().catch(console.error);
