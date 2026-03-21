@@ -583,7 +583,47 @@ server.tool(
             .describe("The new Passport Key to activate. Must start with 'zk_live_' or 'zk_test_'. Get from: https://www.clawcard.store/dashboard/agents"),
     },
     async ({ api_key }) => {
-        const result = setPassportKey(api_key);
+        // Step 1: Format validation
+        const trimmed = api_key.trim();
+        if (!trimmed.startsWith("zk_live_") && !trimmed.startsWith("zk_test_")) {
+            return {
+                content: [{ type: "text" as const, text: `❌ Invalid key format — must start with "zk_live_" or "zk_test_".` }],
+                isError: true,
+            };
+        }
+
+        // Step 2: Validate new key against Dashboard API before swapping
+        const ZZERO_API = process.env.Z_ZERO_API_BASE || "https://www.clawcard.store";
+        try {
+            const resp = await fetch(`${ZZERO_API}/api/wdk/balance`, {
+                headers: {
+                    "Authorization": `Bearer ${trimmed}`,
+                    "x-mcp-version": CURRENT_MCP_VERSION,
+                },
+                signal: AbortSignal.timeout(8000),
+            });
+            if (resp.status === 401) {
+                return {
+                    content: [{ type: "text" as const, text: `❌ Key rejected by server — invalid or deactivated. Please check your key at https://www.clawcard.store/dashboard/agents` }],
+                    isError: true,
+                };
+            }
+            // 426 = version outdated, but key itself could be valid — allow swap
+            if (!resp.ok && resp.status !== 426) {
+                return {
+                    content: [{ type: "text" as const, text: `❌ Could not validate key (server returned ${resp.status}). Try again later.` }],
+                    isError: true,
+                };
+            }
+        } catch (err: any) {
+            return {
+                content: [{ type: "text" as const, text: `❌ Could not reach server to validate key: ${err?.message || 'timeout'}. Try again later.` }],
+                isError: true,
+            };
+        }
+
+        // Step 3: Swap key in RAM (old key is soft-revoked — just forgotten)
+        const result = setPassportKey(trimmed);
         if (!result.ok) {
             return {
                 content: [{ type: "text" as const, text: `❌ ${result.message}` }],
@@ -596,8 +636,8 @@ server.tool(
                 text: JSON.stringify({
                     status: "SUCCESS",
                     message: `✅ ${result.message}`,
-                    active_key_prefix: api_key.slice(0, 12) + "...",
-                    note: "All subsequent API calls will use this key. No restart needed.",
+                    active_key_prefix: trimmed.slice(0, 12) + "...",
+                    note: "All subsequent API calls will use this key. Previous key removed from this session (soft revoke).",
                 }, null, 2),
             }],
         };
@@ -620,7 +660,6 @@ server.tool(
                 text: JSON.stringify({
                     configured: hasKey,
                     key_prefix: hasKey ? key.slice(0, 12) + "..." : null,
-                    wallet_mode: process.env.Z_ZERO_WALLET_MODE || "custodial",
                     note: hasKey
                         ? "Key is active. Call set_api_key to update it."
                         : "No key configured. Call set_api_key with your Passport Key from https://www.clawcard.store/dashboard/agents",
