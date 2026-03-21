@@ -1,3 +1,4 @@
-// Single source of truth for MCP version
-// Imported by both index.ts and wdk_backend.ts to avoid circular dependency
-export const CURRENT_MCP_VERSION = "1.2.1";
+// Single source of truth: reads version from package.json at runtime
+// No need to manually sync — just run `npm version patch` and publish
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+export const CURRENT_MCP_VERSION: string = require("../package.json").version;
