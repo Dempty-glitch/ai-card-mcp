@@ -45,7 +45,7 @@ async function apiRequest(endpoint: string, method: string = 'GET', body: any = 
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ error: res.statusText }));
-            return { error: "API_ERROR", message: err.error || res.statusText };
+            return { error: err.error || "API_ERROR", message: err.message || err.error || res.statusText };
         }
         return await res.json();
     } catch (err: any) {
@@ -71,7 +71,7 @@ async function internalApiRequest(endpoint: string, method: string, body: any) {
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ error: res.statusText }));
-            return { error: "API_ERROR", message: err.error || res.statusText };
+            return { error: err.error || "API_ERROR", message: err.message || err.error || res.statusText };
         }
         return await res.json();
     } catch (err: any) {
